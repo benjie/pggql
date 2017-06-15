@@ -2,12 +2,21 @@ const pg = require("pg");
 const fs = require("fs");
 const { promisify } = require("util");
 const camelcase = require("lodash/camelcase");
-const { GraphQLSchema, GraphQLObjectType, GraphQLString } = require("graphql");
+const upperFirst = require("lodash/upperFirst");
+const {
+  GraphQLNonNull,
+  GraphQLSchema,
+  GraphQLObjectType,
+  GraphQLString,
+} = require("graphql");
 const debug = require("debug")("pggql");
 
 const readFile = promisify(fs.readFile);
 
 const INTROSPECTION_PATH = `${__dirname}/res/introspection-query.sql`;
+
+const nullableIf = (condition, Type) =>
+  condition ? Type : new GraphQLNonNull(Type);
 
 const withPgClient = async (pgConfig = process.env.DATABASE_URL, fn) => {
   if (!fn) {
@@ -44,18 +53,22 @@ const withPgClient = async (pgConfig = process.env.DATABASE_URL, fn) => {
 };
 
 const defaultInflection = {
-  table: camelcase,
-  column: camelcase,
+  table: str => upperFirst(camelcase(str)),
+  field: camelcase,
   singleByKeys: (typeName, keys) =>
     camelcase(`${typeName}-by-${keys.join("-and-")}`), // postsByAuthorId
 };
 
 const QueryPlugin = listener => {
-  listener.on("schema", async (spec, { process, extend }) => {
-    const queryType = await process(GraphQLObjectType, {
-      name: "Query",
-      fields: {},
-    });
+  listener.on("schema", async (spec, { buildWithHooks, extend }) => {
+    const queryType = await buildWithHooks(
+      GraphQLObjectType,
+      {
+        name: "Query",
+        fields: {},
+      },
+      { isRootQuery: true }
+    );
     return extend(spec, {
       query: queryType,
     });
@@ -72,9 +85,9 @@ const RowByPrimaryKeyPlugin = listener => {
         extend,
         pg: { gqlTypeByClassId, introspectionResultsByKind },
       },
-      { spec: { name } }
+      { scope: { isRootQuery } }
     ) => {
-      if (name !== "Query") {
+      if (!isRootQuery) {
         return;
       }
       return extend(
@@ -82,7 +95,7 @@ const RowByPrimaryKeyPlugin = listener => {
         introspectionResultsByKind.class.reduce((memo, result) => {
           const type = gqlTypeByClassId[result.id];
           if (type) {
-            memo[inflection.table(`random-${result.name}`)] = {
+            memo[inflection.field(`random-${result.name}`)] = {
               type: type,
               resolve: () => ({}),
             };
@@ -95,7 +108,45 @@ const RowByPrimaryKeyPlugin = listener => {
 };
 
 const ColumnsPlugin = listener => {
-  listener.on("fields", typeSpec => {});
+  listener.on(
+    "objectType:fields",
+    (
+      fields,
+      { inflection, extend, pg: { introspectionResultsByKind } },
+      { scope }
+    ) => {
+      if (
+        !scope.pg ||
+        !scope.pg.introspection ||
+        scope.pg.introspection.kind !== "class"
+      ) {
+        return;
+      }
+      const table = scope.pg.introspection;
+      return extend(
+        fields,
+        introspectionResultsByKind.attribute
+          .filter(attr => attr.classId === table.id)
+          .reduce((memo, attr) => {
+            /*
+            attr =
+              { kind: 'attribute',
+                classId: '6546809',
+                num: 21,
+                name: 'upstreamName',
+                description: null,
+                typeId: '6484393',
+                isNotNull: false,
+                hasDefault: false }
+            */
+            memo[inflection.field(`${attr.name}`)] = {
+              type: nullableIf(!attr.isNotNull, GraphQLString),
+            };
+            return memo;
+          }, {})
+      );
+    }
+  );
 };
 
 const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
@@ -134,22 +185,28 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
 };
 
 const PgTablesPlugin = listener => {
-  listener.on("context", async (context, { extend, process, inflection }) => {
+  listener.on("context", async (context, { buildWithHooks, inflection }) => {
     await Promise.all(
       context.pg.introspectionResultsByKind.class.map(async table => {
-        context.pg.gqlTypeByClassId[
-          table.id
-        ] = await process(GraphQLObjectType, {
-          name: inflection.table(table.name),
-          fields: {
-            hello: {
-              type: GraphQLString,
-              resolve() {
-                return "World";
+        context.pg.gqlTypeByClassId[table.id] = await buildWithHooks(
+          GraphQLObjectType,
+          {
+            name: inflection.table(table.name),
+            fields: {
+              hello: {
+                type: GraphQLString,
+                resolve() {
+                  return "World";
+                },
               },
             },
           },
-        });
+          {
+            pg: {
+              introspection: table,
+            },
+          }
+        );
       })
     );
   });
@@ -219,15 +276,17 @@ const schemaFromPg = async (
       }
       return Object.assign({}, obj, obj2);
     },
-    async process(Type, spec) {
+    async buildWithHooks(Type, spec, scope = {}) {
       let newSpec = spec;
       if (Type === GraphQLSchema) {
         newSpec = await listener.applyHooks("schema", newSpec, {
           spec: newSpec,
+          scope,
         });
       } else if (Type === GraphQLObjectType) {
         newSpec = await listener.applyHooks("objectType", newSpec, {
           spec: newSpec,
+          scope,
         });
         newSpec = Object.assign({}, newSpec, {
           fields: await listener.applyHooks(
@@ -236,6 +295,7 @@ const schemaFromPg = async (
             {
               spec: newSpec,
               fields: newSpec.fields,
+              scope,
             }
           ),
         });
@@ -243,7 +303,7 @@ const schemaFromPg = async (
       return new Type(newSpec);
     },
   });
-  return listener.context.process(GraphQLSchema, {});
+  return listener.context.buildWithHooks(GraphQLSchema, {});
 };
 
 exports.withPgClient = withPgClient;
