@@ -1,0 +1,30 @@
+{
+  "name": "pggql",
+  "version": "0.0.0",
+  "description": "GraphQL utilities from PostgreSQL reflection",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benjie/pggql.git"
+  },
+  "keywords": [
+    "graphql",
+    "postgresql",
+    "postgres",
+    "pg",
+    "gql",
+    "apollo",
+    "graphqljs",
+    "db",
+    "sql"
+  ],
+  "author": "Benjie Gillam <benjie@jemjie.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/benjie/pggql/issues"
+  },
+  "homepage": "https://github.com/benjie/pggql#readme"
+}
