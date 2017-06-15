@@ -11,6 +11,8 @@ const {
 } = require("graphql");
 const debug = require("debug")("pggql");
 
+const quoteIdent = str => `"${str.replace(/"/g, '""')}"`;
+
 const readFile = promisify(fs.readFile);
 
 const INTROSPECTION_PATH = `${__dirname}/res/introspection-query.sql`;
@@ -92,12 +94,29 @@ const RowByPrimaryKeyPlugin = listener => {
       }
       return extend(
         spec,
-        introspectionResultsByKind.class.reduce((memo, result) => {
-          const type = gqlTypeByClassId[result.id];
+        introspectionResultsByKind.class.reduce((memo, table) => {
+          const type = gqlTypeByClassId[table.id];
+          const schema = introspectionResultsByKind.namespace.filter(
+            n => n.id === table.namespaceId
+          )[0];
+          if (!schema) {
+            console.warn(
+              `Could not find the schema for table '${table.name}'; skipping`
+            );
+            return memo;
+          }
+          const sqlSafeSchemaName = quoteIdent(schema.name);
+          const sqlSafeTableName = quoteIdent(table.name);
+          const sqlSafeFullTableName = `${sqlSafeSchemaName}.${sqlSafeTableName}`;
           if (type) {
-            memo[inflection.field(`random-${result.name}`)] = {
+            memo[inflection.field(`random-${table.name}`)] = {
               type: type,
-              resolve: () => ({}),
+              resolve: async (parent, args, { pgClient }) => {
+                const { rows: [row] } = await pgClient.query(`
+                  select ${sqlSafeTableName}.* from ${sqlSafeFullTableName} order by random() limit 1;
+                `);
+                return row;
+              },
             };
           }
           return memo;
@@ -141,6 +160,9 @@ const ColumnsPlugin = listener => {
             */
             memo[inflection.field(`${attr.name}`)] = {
               type: nullableIf(!attr.isNotNull, GraphQLString),
+              resolve: data => {
+                return data[attr.name];
+              },
             };
             return memo;
           }, {})
@@ -192,14 +214,7 @@ const PgTablesPlugin = listener => {
           GraphQLObjectType,
           {
             name: inflection.table(table.name),
-            fields: {
-              hello: {
-                type: GraphQLString,
-                resolve() {
-                  return "World";
-                },
-              },
-            },
+            fields: {},
           },
           {
             pg: {
