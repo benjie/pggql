@@ -13,7 +13,9 @@ const { /*introspectionQuery,*/ printSchema } = require("graphql/utilities");
     schema,
     `
     query {
-      hello
+      randomUser { 
+        hello
+      }
     }
   `
   );

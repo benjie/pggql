@@ -3,6 +3,7 @@ const fs = require("fs");
 const { promisify } = require("util");
 const camelcase = require("lodash/camelcase");
 const { GraphQLSchema, GraphQLObjectType, GraphQLString } = require("graphql");
+const debug = require("debug")("pggql");
 
 const readFile = promisify(fs.readFile);
 
@@ -64,115 +65,185 @@ const QueryPlugin = listener => {
 const RowByPrimaryKeyPlugin = listener => {
   listener.on(
     "objectType:fields",
-    (spec, { process, extend }, { spec: { name } }) => {
+    (
+      spec,
+      {
+        inflection,
+        extend,
+        pg: { gqlTypeByClassId, introspectionResultsByKind },
+      },
+      { spec: { name } }
+    ) => {
       if (name !== "Query") {
         return;
       }
-      return extend(spec, {
-        hello: {
-          type: GraphQLString,
-          resolve() {
-            return "World";
-          },
-        },
-      });
+      return extend(
+        spec,
+        introspectionResultsByKind.class.reduce((memo, result) => {
+          const type = gqlTypeByClassId[result.id];
+          if (type) {
+            memo[inflection.table(`random-${result.name}`)] = {
+              type: type,
+              resolve: () => ({}),
+            };
+          }
+          return memo;
+        }, {})
+      );
     }
   );
 };
 
 const ColumnsPlugin = listener => {
-  listener.on("fields", ({ name }) => name === "Query", typeSpec => {});
+  listener.on("fields", typeSpec => {});
 };
 
-const defaultPlugins = [QueryPlugin, RowByPrimaryKeyPlugin, ColumnsPlugin];
+const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
+  listener.on("context", (context, { extend }) => {
+    if (!Array.isArray(schema)) {
+      throw new Error("Argument 'schema' (array) is required");
+    }
+    return withPgClient(pgConfig, async pgClient => {
+      // Perform introspection
+      const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
+      const { rows } = await pgClient.query(introspectionQuery, [schema]);
+
+      const introspectionResultsByKind = rows.reduce(
+        (memo, { object }) => {
+          memo[object.kind].push(object);
+          return memo;
+        },
+        {
+          namespace: [],
+          class: [],
+          attribute: [],
+          type: [],
+          constraint: [],
+          procedure: [],
+        }
+      );
+
+      return extend(context, {
+        pg: {
+          introspectionResultsByKind,
+          gqlTypeByClassId: {},
+        },
+      });
+    });
+  });
+};
+
+const PgTablesPlugin = listener => {
+  listener.on("context", async (context, { extend, process, inflection }) => {
+    await Promise.all(
+      context.pg.introspectionResultsByKind.class.map(async table => {
+        context.pg.gqlTypeByClassId[
+          table.id
+        ] = await process(GraphQLObjectType, {
+          name: inflection.table(table.name),
+          fields: {
+            hello: {
+              type: GraphQLString,
+              resolve() {
+                return "World";
+              },
+            },
+          },
+        });
+      })
+    );
+  });
+};
+
+const defaultPlugins = [
+  PgIntrospectionPlugin,
+  PgTablesPlugin,
+  QueryPlugin,
+  RowByPrimaryKeyPlugin,
+  ColumnsPlugin,
+];
 
 const schemaFromPg = async (
   pgConfig,
   { schema, inflection = defaultInflection, plugins = defaultPlugins }
 ) => {
-  if (!Array.isArray(schema)) {
-    throw new Error("Argument 'schema' (array) is required");
-  }
-  return withPgClient(pgConfig, async pgClient => {
-    // Perform introspection
-    const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
-    const { rows } = await pgClient.query(introspectionQuery, [schema]);
+  const options = {
+    pg: {
+      pgConfig,
+      schema,
+    },
+  };
 
-    const introspectionResultsByKind = rows.reduce(
-      (memo, { object }) => {
-        memo[object.kind].push(object);
-        return memo;
-      },
-      {
-        namespace: [],
-        class: [],
-        attribute: [],
-        type: [],
-        constraint: [],
-        procedure: [],
+  let hookCounter = 0;
+
+  const listener = {
+    context: {},
+    hooks: [],
+    on(event, fn) {
+      this.hooks[event] = this.hooks[event] || [];
+      this.hooks[event].push(fn);
+    },
+    async applyHooks(event, spec, position) {
+      const thisCounter = ++hookCounter;
+      debug(`Hook\t${thisCounter}\t[${event}] Running...`);
+      let newSpec = spec;
+      if (event === "context") {
+        listener.context = newSpec;
       }
-    );
-
-    const context = {
-      introspectionResultsByKind,
-      extend(obj, obj2) {
-        const keysA = Object.keys(obj);
-        const keysB = Object.keys(obj2);
-        for (const key of keysB) {
-          if (keysA.includes(key)) {
-            throw new Error(`Overwriting key '${key}' is not allowed!`);
-          }
+      const hooks = this.hooks[event] || [];
+      for (const hook of hooks) {
+        const result = await hook(newSpec, listener.context, position);
+        if (result) {
+          newSpec = result;
         }
-        return Object.assign({}, obj, obj2);
-      },
-      async process(Type, spec) {
-        let newSpec = spec;
-        if (Type === GraphQLSchema) {
-          newSpec = await listener.applyHooks("schema", newSpec, {
-            spec: newSpec,
-          });
-        } else if (Type === GraphQLObjectType) {
-          newSpec = await listener.applyHooks("objectType", newSpec, {
-            spec: newSpec,
-          });
-          newSpec = Object.assign({}, newSpec, {
-            fields: await listener.applyHooks(
-              "objectType:fields",
-              newSpec.fields,
-              {
-                spec: newSpec,
-                fields: newSpec.fields,
-              }
-            ),
-          });
+        if (event === "context") {
+          listener.context = newSpec;
         }
-        return new Type(newSpec);
-      },
-    };
-
-    const listener = {
-      hooks: [],
-      on(event, fn) {
-        this.hooks[event] = this.hooks[event] || [];
-        this.hooks[event].push(fn);
-      },
-      async applyHooks(event, spec, position) {
-        let newSpec = spec;
-        const hooks = this.hooks[event] || [];
-        for (const hook of hooks) {
-          const result = await hook(newSpec, context, position);
-          if (result) {
-            newSpec = result;
-          }
+      }
+      debug(`Hook\t${thisCounter}\t[${event}] Complete`);
+      return newSpec;
+    },
+  };
+  for (const plugin of plugins) {
+    plugin(listener, options);
+  }
+  await listener.applyHooks("context", {
+    inflection,
+    extend(obj, obj2) {
+      const keysA = Object.keys(obj);
+      const keysB = Object.keys(obj2);
+      for (const key of keysB) {
+        if (keysA.includes(key)) {
+          throw new Error(`Overwriting key '${key}' is not allowed!`);
         }
-        return newSpec;
-      },
-    };
-    for (const plugin of plugins) {
-      plugin(listener);
-    }
-    return context.process(GraphQLSchema, {});
+      }
+      return Object.assign({}, obj, obj2);
+    },
+    async process(Type, spec) {
+      let newSpec = spec;
+      if (Type === GraphQLSchema) {
+        newSpec = await listener.applyHooks("schema", newSpec, {
+          spec: newSpec,
+        });
+      } else if (Type === GraphQLObjectType) {
+        newSpec = await listener.applyHooks("objectType", newSpec, {
+          spec: newSpec,
+        });
+        newSpec = Object.assign({}, newSpec, {
+          fields: await listener.applyHooks(
+            "objectType:fields",
+            newSpec.fields,
+            {
+              spec: newSpec,
+              fields: newSpec.fields,
+            }
+          ),
+        });
+      }
+      return new Type(newSpec);
+    },
   });
+  return listener.context.process(GraphQLSchema, {});
 };
 
 exports.withPgClient = withPgClient;
