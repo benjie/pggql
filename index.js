@@ -12,10 +12,7 @@ const {
 } = require("graphql");
 const debug = require("debug")("pggql");
 const parseResolveInfo = require("./resolveInfo");
-
-const quoteIdent = str => `"${str.replace(/"/g, '""')}"`;
-
-let aliasIndex = 0;
+const pgSQLBuilder = require("./sql");
 
 const readFile = promisify(fs.readFile);
 
@@ -93,6 +90,7 @@ const RowByPrimaryKeyPlugin = listener => {
           gqlTypeByClassId,
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
+          sql,
         },
       },
       { scope: { isRootQuery } }
@@ -113,17 +111,14 @@ const RowByPrimaryKeyPlugin = listener => {
             );
             return memo;
           }
-          const sqlSafeSchemaName = quoteIdent(schema.name);
-          const sqlSafeTableName = quoteIdent(table.name);
-          const sqlSafeFullTableName = `${sqlSafeSchemaName}.${sqlSafeTableName}`;
+          const sqlFullTableName = sql.identifier(schema.name, table.name);
           if (type) {
             memo[inflection.field(`random-${table.name}`)] = {
               type: type,
               async resolve(parent, args, { pgClient }, resolveInfo) {
                 const { alias, fields } = parseResolveInfo(resolveInfo);
                 console.dir(fields);
-                const tableAlias = `${table.name}_${++aliasIndex}`;
-                const sqlSafeTableAlias = quoteIdent(tableAlias);
+                const tableAlias = Symbol();
                 const fragments = [];
                 console.log(
                   sqlFragmentGeneratorsByClassIdAndFieldName[table.id]
@@ -146,16 +141,24 @@ const RowByPrimaryKeyPlugin = listener => {
                   }
                 }
                 console.dir(fragments);
-                const { rows: [row] } = await pgClient.query(`
+                const query = sql.query`
                   select 
-                    ${fragments
-                      .map(
+                    ${sql.join(
+                      fragments.map(
                         ({ sqlFragment, alias }) =>
-                          `${sqlFragment} as ${quoteIdent(alias)}`
-                      )
-                      .join(", ")}
-                  from ${sqlSafeFullTableName} as ${sqlSafeTableAlias} order by random() limit 1;
-                `);
+                          sql.fragment`${sqlFragment} as ${sql.identifier(
+                            alias
+                          )}`
+                      ),
+                      ", "
+                    )}
+                  from ${sqlFullTableName} as ${sql.identifier(
+                  tableAlias
+                )} order by random() limit 1;
+                `;
+                const { text, values } = sql.compile(query);
+                console.log(text);
+                const { rows: [row] } = await pgClient.query(text, values);
                 return row;
               },
             };
@@ -178,6 +181,7 @@ const PgColumnsPlugin = listener => {
         pg: {
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
+          sql,
         },
       },
       { scope }
@@ -213,9 +217,7 @@ const PgColumnsPlugin = listener => {
             ) => [
               {
                 alias: resolveInfoFragment.alias,
-                sqlFragment: `${quoteIdent(tableAlias)}.${quoteIdent(
-                  attr.name
-                )}`,
+                sqlFragment: sql.identifier(tableAlias, attr.name),
               },
             ];
             memo[fieldName] = {
@@ -268,6 +270,7 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
           introspectionResultsByKind,
           gqlTypeByClassId: {},
           sqlFragmentGeneratorsByClassIdAndFieldName: {},
+          sql: pgSQLBuilder,
         },
       });
     });

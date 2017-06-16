@@ -5,6 +5,7 @@ module.exports = {
   env: {
     jest: true,
     node: true,
+    es6: true,
   },
   rules: {
     "prettier/prettier": [
@@ -34,7 +35,7 @@ module.exports = {
     ],
     "no-restricted-syntax": 0,
     "no-await-in-loop": 0,
-    "camelcase": 0,
+    camelcase: 0,
     "jest/no-focused-tests": 2,
     "jest/no-identical-title": 2,
   },
