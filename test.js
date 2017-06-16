@@ -20,11 +20,22 @@ const pgConnectionString = require("pg-connection-string");
     `
     query {
       randomUser {
+        rnd1: random(sides: 6)
+        rnd2: random(sides: 6)
+        rnd3: random(sides: 10)
         id
         name
+        aliasedName: name
         avatarUrl
         createdAt
+        ...Foo
       }
+    }
+    fragment Foo on User {
+      id
+      name
+      rnd1: random(sides: 6)
+      rnd4: random(sides: 20)
     }
     `,
     undefined,
