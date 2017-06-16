@@ -362,6 +362,7 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
         pg: {
           introspectionResultsByKind,
           gqlTypeByClassId: {},
+          gqlTypeByTypeId: {},
           sqlFragmentGeneratorsByClassIdAndFieldName: {},
           sql: pgSQLBuilder,
         },
@@ -412,7 +413,32 @@ const PgTablesPlugin = listener => {
             },
           }
         );
+        const tableType = introspectionResultsByKind.type.filter(
+          type =>
+            type.type === "c" &&
+            type.category === "C" &&
+            type.namespaceId === table.namespaceId &&
+            type.classId === table.id
+        )[0];
+        if (!tableType) {
+          throw new Error("Could not determine the type for this table");
+        }
+        context.pg.gqlTypeByTypeId[tableType.id] =
+          context.pg.gqlTypeByClassId[table.id];
       })
+    );
+  });
+};
+
+const PgTypesPlugin = listener => {
+  listener.on("context", async (context, { buildWithHooks, inflection }) => {
+    await Promise.all(
+      context.pg.introspectionResultsByKind.type
+        .filter(type => true)
+        .map(async type => {
+          console.dir(type);
+          process.exit(1);
+        })
     );
   });
 };
@@ -420,6 +446,7 @@ const PgTablesPlugin = listener => {
 const defaultPlugins = [
   PgIntrospectionPlugin,
   PgTablesPlugin,
+  PgTypesPlugin,
   QueryPlugin,
   RowByPrimaryKeyPlugin,
   PgColumnsPlugin,
@@ -502,11 +529,13 @@ const schemaFromPg = async (
               spec: newSpec,
               fields: newSpec.fields,
               scope,
+              Self,
             }
           ),
         });
       }
-      return new Type(newSpec);
+      const Self = new Type(newSpec);
+      return Self;
     },
   });
   return listener.context.buildWithHooks(GraphQLSchema, {});
