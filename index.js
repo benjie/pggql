@@ -226,10 +226,110 @@ const PgColumnsPlugin = listener => {
                 const { alias } = parseResolveInfo(resolveInfo, {
                   deep: false,
                 });
-                console.log("!!!");
-                console.dir(data);
-                console.log(alias);
-                console.log(resolveInfo);
+                return data[alias];
+              },
+            };
+            return memo;
+          }, {})
+      );
+    }
+  );
+};
+
+const PgComputedColumnsPlugin = listener => {
+  listener.on(
+    "objectType:fields",
+    (
+      fields,
+      {
+        inflection,
+        extend,
+        pg: {
+          introspectionResultsByKind,
+          sqlFragmentGeneratorsByClassIdAndFieldName,
+          sql,
+        },
+      },
+      { scope }
+    ) => {
+      if (
+        !scope.pg ||
+        !scope.pg.introspection ||
+        scope.pg.introspection.kind !== "class"
+      ) {
+        return;
+      }
+      const table = scope.pg.introspection;
+      const tableType = introspectionResultsByKind.type.filter(
+        type =>
+          type.type === "c" &&
+          type.category === "C" &&
+          type.namespaceId === table.namespaceId &&
+          type.classId === table.id
+      )[0];
+      if (!tableType) {
+        throw new Error("Could not determine the type for this table");
+      }
+      return extend(
+        fields,
+        introspectionResultsByKind.procedure
+          .filter(proc => proc.isStable)
+          .filter(proc => proc.namespaceId === table.namespaceId)
+          .filter(proc => proc.name.startsWith(`${table.name}_`))
+          .filter(proc => proc.argTypeIds.length > 0)
+          .filter(proc => proc.argTypeIds[0] === tableType.id)
+          .reduce((memo, proc) => {
+            if (proc.returnsSet) {
+              // XXX: TODO!
+              return memo;
+            }
+            /*
+            proc =
+              { kind: 'procedure',
+                name: 'integration_webhook_secret',
+                description: null,
+                namespaceId: '6484381',
+                isStrict: false,
+                returnsSet: false,
+                isStable: true,
+                returnTypeId: '2950',
+                argTypeIds: [ '6484569' ],
+                argNames: [ 'integration' ],
+                argDefaultsNum: 0 }
+            */
+
+            const fieldName = inflection.field(
+              proc.name.substr(table.name.length + 1)
+            );
+            const schema = introspectionResultsByKind.namespace.filter(
+              n => n.id === proc.namespaceId
+            )[0];
+            if (
+              sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName]
+            ) {
+              console.warn(
+                `WARNING: did not add dynamic column from function '${proc.name}' because field already exists`
+              );
+              return;
+            }
+            sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
+              resolveInfoFragment,
+              tableAlias
+            ) => [
+              {
+                alias: resolveInfoFragment.alias,
+                sqlFragment: sql.fragment`${sql.identifier(
+                  schema.name,
+                  proc.name
+                )}(${sql.identifier(tableAlias)})`,
+              },
+            ];
+            memo[fieldName] = {
+              type: nullableIf(!proc.isNotNull, GraphQLString),
+              resolve: (data, _args, _context, resolveInfo) => {
+                const { alias } = parseResolveInfo(resolveInfo, {
+                  deep: false,
+                });
                 return data[alias];
               },
             };
@@ -281,6 +381,19 @@ const PgTablesPlugin = listener => {
   listener.on("context", async (context, { buildWithHooks, inflection }) => {
     await Promise.all(
       context.pg.introspectionResultsByKind.class.map(async table => {
+        /*
+        table =
+          { kind: 'class',
+            id: '6484790',
+            name: 'bundle',
+            description: null,
+            namespaceId: '6484381',
+            typeId: '6484792',
+            isSelectable: true,
+            isInsertable: true,
+            isUpdatable: true,
+            isDeletable: true }
+        */
         context.pg.sqlFragmentGeneratorsByClassIdAndFieldName[table.id] = {};
         context.pg.gqlTypeByClassId[table.id] = await buildWithHooks(
           GraphQLObjectType,
@@ -317,6 +430,7 @@ const defaultPlugins = [
   QueryPlugin,
   RowByPrimaryKeyPlugin,
   PgColumnsPlugin,
+  PgComputedColumnsPlugin,
 ];
 
 const schemaFromPg = async (

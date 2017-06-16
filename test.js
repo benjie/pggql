@@ -30,6 +30,9 @@ const pgConnectionString = require("pg-connection-string");
         createdAt
         ...Foo
       }
+      randomSketch {
+        configuration
+      }
     }
     fragment Foo on User {
       id
