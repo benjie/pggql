@@ -117,14 +117,9 @@ const RowByPrimaryKeyPlugin = listener => {
               type: type,
               async resolve(parent, args, { pgClient }, resolveInfo) {
                 const { alias, fields } = parseResolveInfo(resolveInfo);
-                console.dir(fields);
                 const tableAlias = Symbol();
                 const fragments = [];
-                console.log(
-                  sqlFragmentGeneratorsByClassIdAndFieldName[table.id]
-                );
                 for (const alias in fields) {
-                  console.log(alias);
                   const spec = fields[alias];
                   const generator =
                     sqlFragmentGeneratorsByClassIdAndFieldName[table.id][
@@ -140,7 +135,6 @@ const RowByPrimaryKeyPlugin = listener => {
                     fragments.push(...generatedFrags);
                   }
                 }
-                console.dir(fragments);
                 const query = sql.query`
                   select 
                     ${sql.join(
@@ -157,7 +151,6 @@ const RowByPrimaryKeyPlugin = listener => {
                 )} order by random() limit 1;
                 `;
                 const { text, values } = sql.compile(query);
-                console.log(text);
                 const { rows: [row] } = await pgClient.query(text, values);
                 return row;
               },
