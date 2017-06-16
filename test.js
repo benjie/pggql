@@ -51,7 +51,7 @@ const pgConnectionString = require("pg-connection-string");
     console.error("ERROR introspecting schema: ", result.errors);
     process.exit(1);
   } else {
-    console.dir(result);
+    console.dir(result, { depth: 5 });
   }
   process.exit(0);
 })().catch(e => {

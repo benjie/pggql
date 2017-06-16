@@ -3,16 +3,40 @@ const fs = require("fs");
 const { promisify } = require("util");
 const camelcase = require("lodash/camelcase");
 const upperFirst = require("lodash/upperFirst");
+const { Kind } = require("graphql/language");
 const {
   GraphQLNonNull,
   GraphQLSchema,
   GraphQLObjectType,
   GraphQLString,
   GraphQLInt,
+  GraphQLFloat,
+  GraphQLBoolean,
+  GraphQLList,
+  GraphQLScalarType,
+  GraphQLEnumType,
 } = require("graphql");
 const debug = require("debug")("pggql");
 const parseResolveInfo = require("./resolveInfo");
 const pgSQLBuilder = require("./sql");
+const GraphQLJSON = require("graphql-type-json");
+const {
+  GraphQLDate,
+  GraphQLTime,
+  GraphQLDateTime,
+} = require("graphql-iso-date");
+
+const GraphQLUUID = new GraphQLScalarType({
+  name: "UUID",
+  serialize: value => String(value),
+  parseValue: value => String(value),
+  parseLiteral: ast => {
+    if (ast.kind !== Kind.STRING) {
+      throw new Error("Can only parse string values");
+    }
+    return ast.value;
+  },
+});
 
 const readFile = promisify(fs.readFile);
 
@@ -63,8 +87,8 @@ const defaultInflection = {
 };
 
 const QueryPlugin = listener => {
-  listener.on("schema", async (spec, { buildWithHooks, extend }) => {
-    const queryType = await buildWithHooks(
+  listener.on("schema", (spec, { buildWithHooks, extend }) => {
+    const queryType = buildWithHooks(
       GraphQLObjectType,
       {
         name: "Query",
@@ -334,29 +358,30 @@ const PgComputedColumnsPlugin = listener => {
 };
 
 const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
-  listener.on("context", (context, { extend }) => {
-    if (!Array.isArray(schema)) {
-      throw new Error("Argument 'schema' (array) is required");
-    }
-    return withPgClient(pgConfig, async pgClient => {
-      // Perform introspection
-      const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
-      const { rows } = await pgClient.query(introspectionQuery, [schema]);
+  return withPgClient(pgConfig, async pgClient => {
+    // Perform introspection
+    const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
+    const { rows } = await pgClient.query(introspectionQuery, [schema]);
 
-      const introspectionResultsByKind = rows.reduce(
-        (memo, { object }) => {
-          memo[object.kind].push(object);
-          return memo;
-        },
-        {
-          namespace: [],
-          class: [],
-          attribute: [],
-          type: [],
-          constraint: [],
-          procedure: [],
-        }
-      );
+    const introspectionResultsByKind = rows.reduce(
+      (memo, { object }) => {
+        memo[object.kind].push(object);
+        return memo;
+      },
+      {
+        namespace: [],
+        class: [],
+        attribute: [],
+        type: [],
+        constraint: [],
+        procedure: [],
+      }
+    );
+
+    listener.on("context", (context, { extend }) => {
+      if (!Array.isArray(schema)) {
+        throw new Error("Argument 'schema' (array) is required");
+      }
 
       return extend(context, {
         pg: {
@@ -372,9 +397,17 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
 };
 
 const PgTablesPlugin = listener => {
-  listener.on("context", async (context, { buildWithHooks, inflection }) => {
-    await Promise.all(
-      context.pg.introspectionResultsByKind.class.map(async table => {
+  listener.on(
+    "context",
+    (
+      context,
+      {
+        buildWithHooks,
+        inflection,
+        pg: { introspectionResultsByKind, gqlTypeByTypeId },
+      }
+    ) => {
+      context.pg.introspectionResultsByKind.class.map(table => {
         /*
         table =
           { kind: 'class',
@@ -389,23 +422,11 @@ const PgTablesPlugin = listener => {
             isDeletable: true }
         */
         context.pg.sqlFragmentGeneratorsByClassIdAndFieldName[table.id] = {};
-        context.pg.gqlTypeByClassId[table.id] = await buildWithHooks(
+        context.pg.gqlTypeByClassId[table.id] = buildWithHooks(
           GraphQLObjectType,
           {
             name: inflection.table(table.name),
-            fields: {
-              random: {
-                type: GraphQLInt,
-                args: {
-                  sides: {
-                    type: GraphQLInt,
-                  },
-                },
-                resolve(_, { sides }) {
-                  return Math.floor(Math.random() * sides) + 1;
-                },
-              },
-            },
+            fields: {},
           },
           {
             pg: {
@@ -425,21 +446,122 @@ const PgTablesPlugin = listener => {
         }
         context.pg.gqlTypeByTypeId[tableType.id] =
           context.pg.gqlTypeByClassId[table.id];
-      })
-    );
-  });
+      });
+    }
+  );
 };
 
 const PgTypesPlugin = listener => {
-  listener.on("context", async (context, { buildWithHooks, inflection }) => {
-    await Promise.all(
+  listener.on(
+    "context",
+    (context, { buildWithHooks, inflection, pg: { gqlTypeByTypeId } }) => {
+      /*
+      type =
+        { kind: 'type',
+          id: '1021',
+          name: '_float4',
+          description: null,
+          namespaceId: '11',
+          namespaceName: 'pg_catalog',
+          type: 'b',
+          category: 'A',
+          domainIsNotNull: false,
+          arrayItemTypeId: '700',
+          classId: null,
+          domainBaseTypeId: null,
+          enumVariants: null,
+          rangeSubTypeId: null }
+      */
+      const pgTypeById = context.pg.introspectionResultsByKind.type.reduce(
+        (memo, type) => {
+          memo[type.id] = type;
+          return memo;
+        },
+        {}
+      );
+      const categoryLookup = {
+        B: () => GraphQLBoolean,
+        N: () => GraphQLFloat,
+        A: type =>
+          new GraphQLList(
+            new GraphQLNonNull(
+              enforceGqlTypeByPgType(pgTypeById[type.arrayItemTypeId])
+            )
+          ),
+      };
+      /*
+        Determined by running:
+
+          select oid, typname, typarray, typcategory, typtype from pg_catalog.pg_type where typtype = 'b' order by oid;
+
+        We only need to add oidLookups for types that don't have the correct fallback
+      */
+      const oidLookup = {
+        20: GraphQLFloat, // Even though this is int8, it's too big for JS int, so cast to float (or string?).
+        21: GraphQLInt,
+        23: GraphQLInt,
+        114: GraphQLJSON,
+        3802: GraphQLJSON,
+        2950: GraphQLUUID,
+        1082: GraphQLDate, // date
+        1114: GraphQLDateTime, // timestamp
+        1184: GraphQLDateTime, // timestamptz
+        1083: GraphQLTime, // time
+        1266: GraphQLTime, // timetz
+        // 1186 interval
+      };
+      const enforceGqlTypeByPgType = type => {
+        // Explicit overrides
+        if (!gqlTypeByTypeId[type.id]) {
+          const gqlType = oidLookup[type.category];
+          if (gqlType) {
+            gqlTypeByTypeId[type.id] = gqlType;
+          }
+        }
+        // Enums
+        if (!gqlTypeByTypeId[type.id] && type.typtype === "e") {
+          gqlTypeByTypeId[type.id] = new GraphQLEnumType({
+            name: upperFirst(camelcase(`${type.name}-enum`)),
+            values: type.enumVariants,
+            description: type.description,
+          });
+        }
+        // Fall back to categories
+        if (!gqlTypeByTypeId[type.id]) {
+          const gen = categoryLookup[type.category];
+          if (gen) {
+            gqlTypeByTypeId[type.id] = gen(type);
+          }
+        }
+        // Nothing else worked; pass through as string!
+        if (!gqlTypeByTypeId[type.id]) {
+          gqlTypeByTypeId[type.id] = GraphQLString;
+        }
+        return gqlTypeByTypeId[type.id];
+      };
+
       context.pg.introspectionResultsByKind.type
         .filter(type => true)
-        .map(async type => {
-          console.dir(type);
-          process.exit(1);
-        })
-    );
+        .forEach(enforceGqlTypeByPgType);
+    }
+  );
+};
+
+const RandomFieldPlugin = async listener => {
+  listener.on("objectType:fields", (fields, { extend }) => {
+    return extend(fields, {
+      random: {
+        type: GraphQLInt,
+        args: {
+          sides: {
+            type: GraphQLInt,
+          },
+        },
+        resolve(_, { sides }) {
+          return Math.floor(Math.random() * sides) + 1;
+        },
+      },
+    });
   });
 };
 
@@ -451,6 +573,7 @@ const defaultPlugins = [
   RowByPrimaryKeyPlugin,
   PgColumnsPlugin,
   PgComputedColumnsPlugin,
+  RandomFieldPlugin,
 ];
 
 const schemaFromPg = async (
@@ -473,7 +596,7 @@ const schemaFromPg = async (
       this.hooks[event] = this.hooks[event] || [];
       this.hooks[event].push(fn);
     },
-    async applyHooks(event, spec, position) {
+    applyHooks(event, spec, position) {
       const thisCounter = ++hookCounter;
       debug(`Hook\t${thisCounter}\t[${event}] Running...`);
       let newSpec = spec;
@@ -482,7 +605,7 @@ const schemaFromPg = async (
       }
       const hooks = this.hooks[event] || [];
       for (const hook of hooks) {
-        const result = await hook(newSpec, listener.context, position);
+        const result = hook(newSpec, listener.context, position);
         if (result) {
           newSpec = result;
         }
@@ -495,9 +618,9 @@ const schemaFromPg = async (
     },
   };
   for (const plugin of plugins) {
-    plugin(listener, options);
+    await plugin(listener, options);
   }
-  await listener.applyHooks("context", {
+  listener.applyHooks("context", {
     inflection,
     extend(obj, obj2) {
       const keysA = Object.keys(obj);
@@ -509,29 +632,26 @@ const schemaFromPg = async (
       }
       return Object.assign({}, obj, obj2);
     },
-    async buildWithHooks(Type, spec, scope = {}) {
+    buildWithHooks(Type, spec, scope = {}) {
       let newSpec = spec;
       if (Type === GraphQLSchema) {
-        newSpec = await listener.applyHooks("schema", newSpec, {
+        newSpec = listener.applyHooks("schema", newSpec, {
           spec: newSpec,
           scope,
         });
       } else if (Type === GraphQLObjectType) {
-        newSpec = await listener.applyHooks("objectType", newSpec, {
+        newSpec = listener.applyHooks("objectType", newSpec, {
           spec: newSpec,
           scope,
         });
         newSpec = Object.assign({}, newSpec, {
-          fields: await listener.applyHooks(
-            "objectType:fields",
-            newSpec.fields,
-            {
+          fields: () =>
+            listener.applyHooks("objectType:fields", newSpec.fields, {
               spec: newSpec,
               fields: newSpec.fields,
               scope,
               Self,
-            }
-          ),
+            }),
         });
       }
       const Self = new Type(newSpec);
