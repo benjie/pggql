@@ -196,6 +196,7 @@ const PgColumnsPlugin = listener => {
         inflection,
         extend,
         pg: {
+          gqlTypeByTypeId,
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
@@ -238,7 +239,10 @@ const PgColumnsPlugin = listener => {
               },
             ];
             memo[fieldName] = {
-              type: nullableIf(!attr.isNotNull, GraphQLString),
+              type: nullableIf(
+                !attr.isNotNull,
+                gqlTypeByTypeId[attr.typeId] || GraphQLString
+              ),
               resolve: (data, _args, _context, resolveInfo) => {
                 const { alias } = parseResolveInfo(resolveInfo, {
                   deep: false,
@@ -265,6 +269,7 @@ const PgComputedColumnsPlugin = listener => {
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
+          gqlTypeByTypeId,
         },
       },
       { scope }
@@ -342,7 +347,7 @@ const PgComputedColumnsPlugin = listener => {
               },
             ];
             memo[fieldName] = {
-              type: nullableIf(!proc.isNotNull, GraphQLString),
+              type: gqlTypeByTypeId[proc.returnTypeId] || GraphQLString,
               resolve: (data, _args, _context, resolveInfo) => {
                 const { alias } = parseResolveInfo(resolveInfo, {
                   deep: false,
@@ -513,7 +518,7 @@ const PgTypesPlugin = listener => {
       const enforceGqlTypeByPgType = type => {
         // Explicit overrides
         if (!gqlTypeByTypeId[type.id]) {
-          const gqlType = oidLookup[type.category];
+          const gqlType = oidLookup[type.id];
           if (gqlType) {
             gqlTypeByTypeId[type.id] = gqlType;
           }
