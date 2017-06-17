@@ -19,7 +19,7 @@ const pgConnectionString = require("pg-connection-string");
     schema,
     `
     query {
-      randomUser {
+      userById(id: 1) {
         rnd1: random(sides: 6)
         rnd2: random(sides: 6)
         rnd3: random(sides: 10)
@@ -30,7 +30,8 @@ const pgConnectionString = require("pg-connection-string");
         createdAt
         ...Foo
       }
-      randomSketch {
+      sketchById(id: 69) {
+        id
         configuration
       }
     }

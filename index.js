@@ -102,7 +102,7 @@ const QueryPlugin = listener => {
   });
 };
 
-const RowByPrimaryKeyPlugin = listener => {
+const PgRowByUniqueConstraint = listener => {
   listener.on(
     "objectType:fields",
     (
@@ -112,6 +112,7 @@ const RowByPrimaryKeyPlugin = listener => {
         extend,
         pg: {
           gqlTypeByClassId,
+          gqlTypeByTypeId,
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
@@ -137,48 +138,77 @@ const RowByPrimaryKeyPlugin = listener => {
           }
           const sqlFullTableName = sql.identifier(schema.name, table.name);
           if (type) {
-            memo[inflection.field(`random-${table.name}`)] = {
-              type: type,
-              async resolve(parent, args, { pgClient }, resolveInfo) {
-                const { alias, fields } = parseResolveInfo(resolveInfo);
-                const tableAlias = Symbol();
-                const fragments = [];
-                for (const alias in fields) {
-                  const spec = fields[alias];
-                  const generator =
-                    sqlFragmentGeneratorsByClassIdAndFieldName[table.id][
-                      spec.name
-                    ];
-                  if (generator) {
-                    const generatedFrags = generator(spec, tableAlias);
-                    if (!Array.isArray(generatedFrags)) {
-                      throw new Error(
-                        "sqlFragmentGeneratorsByClassIdAndFieldName generators must generate arrays"
-                      );
+            const uniqueConstraints = introspectionResultsByKind.constraint
+              .filter(con => ["u", "p"].includes(con.type))
+              .filter(con => con.classId === table.id);
+            console.dir(table);
+            console.dir(uniqueConstraints);
+            const attributes = introspectionResultsByKind.attribute
+              .filter(attr => attr.classId === table.id)
+              .sort((a, b) => a.num - b.num);
+            uniqueConstraints.forEach(constraint => {
+              console.dir(attributes);
+              const keys = attributes.filter(attr =>
+                constraint.keyAttributeNums.includes(attr.num)
+              );
+              if (keys.length !== constraint.keyAttributeNums.length) {
+                throw new Error(
+                  "Consistency error: ${keys.length} !== ${constraint.keyAttributeNums.length}"
+                );
+              }
+              memo[
+                inflection.field(
+                  `${table.name}-by-${keys.map(key => key.name).join("-and-")}`
+                )
+              ] = {
+                type: type,
+                args: keys.reduce((memo, key) => {
+                  memo[inflection.field(key.name)] = {
+                    type: gqlTypeByTypeId[key.typeId],
+                  };
+                  return memo;
+                }, {}),
+                async resolve(parent, args, { pgClient }, resolveInfo) {
+                  const { alias, fields } = parseResolveInfo(resolveInfo);
+                  const tableAlias = Symbol();
+                  const fragments = [];
+                  for (const alias in fields) {
+                    const spec = fields[alias];
+                    const generator =
+                      sqlFragmentGeneratorsByClassIdAndFieldName[table.id][
+                        spec.name
+                      ];
+                    if (generator) {
+                      const generatedFrags = generator(spec, tableAlias);
+                      if (!Array.isArray(generatedFrags)) {
+                        throw new Error(
+                          "sqlFragmentGeneratorsByClassIdAndFieldName generators must generate arrays"
+                        );
+                      }
+                      fragments.push(...generatedFrags);
                     }
-                    fragments.push(...generatedFrags);
                   }
-                }
-                const query = sql.query`
-                  select 
-                    ${sql.join(
-                      fragments.map(
-                        ({ sqlFragment, alias }) =>
-                          sql.fragment`${sqlFragment} as ${sql.identifier(
-                            alias
-                          )}`
-                      ),
-                      ", "
-                    )}
-                  from ${sqlFullTableName} as ${sql.identifier(
-                  tableAlias
-                )} order by random() limit 1;
-                `;
-                const { text, values } = sql.compile(query);
-                const { rows: [row] } = await pgClient.query(text, values);
-                return row;
-              },
-            };
+                  const query = sql.query`
+                      select 
+                        ${sql.join(
+                          fragments.map(
+                            ({ sqlFragment, alias }) =>
+                              sql.fragment`${sqlFragment} as ${sql.identifier(
+                                alias
+                              )}`
+                          ),
+                          ", "
+                        )}
+                      from ${sqlFullTableName} as ${sql.identifier(
+                    tableAlias
+                  )} order by random() limit 1;
+                    `;
+                  const { text, values } = sql.compile(query);
+                  const { rows: [row] } = await pgClient.query(text, values);
+                  return row;
+                },
+              };
+            });
           }
           return memo;
         }, {})
@@ -575,7 +605,7 @@ const defaultPlugins = [
   PgTablesPlugin,
   PgTypesPlugin,
   QueryPlugin,
-  RowByPrimaryKeyPlugin,
+  PgRowByUniqueConstraint,
   PgColumnsPlugin,
   PgComputedColumnsPlugin,
   RandomFieldPlugin,
