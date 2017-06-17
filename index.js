@@ -207,8 +207,7 @@ const PgRowByUniqueConstraint = listener => {
                           ", "
                         )}
                       from ${sqlFullTableName} as ${sql.identifier(tableAlias)} 
-                  where (${sql.join(conditions, ") and (")})
-                  order by random() limit 1;
+                      where (${sql.join(conditions, ") and (")})
                     `;
                   const { text, values } = sql.compile(query);
                   const { rows: [row] } = await pgClient.query(text, values);
