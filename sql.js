@@ -1,4 +1,6 @@
 // Full credit: https://raw.githubusercontent.com/postgraphql/postgraphql/master/src/postgres/utils/sql.ts
+const isString = require("lodash/isString");
+const lodashIsFinite = require("lodash/isFinite");
 
 function compile(sql) {
   // Join this to generate the SQL query
@@ -101,6 +103,24 @@ const identifier = (...names) => ({ type: "IDENTIFIER", names });
 const value = val => ({ type: "VALUE", value: val });
 
 /**
+ * If the value is simple will inline it into the query, otherwise will defer
+ * to value.
+ */
+const literal = val => {
+  if (isString(val) && val.match(/^[a-zA-Z0-9_-]*$/)) {
+    return raw(`'${val}'`);
+  } else if (lodashIsFinite(val)) {
+    if (Number.isInteger(val)) {
+      return raw(String(val));
+    } else {
+      return raw(`'${val}'::float`);
+    }
+  } else {
+    return { type: "VALUE", value: val };
+  }
+};
+
+/**
  * Join some Sql items together seperated by a string. Useful when dealing
  * with lists of Sql items that doesn’t make sense as a Sql query.
  */
@@ -139,6 +159,6 @@ exports.fragment = query;
 exports.raw = raw;
 exports.identifier = identifier;
 exports.value = value;
-exports.literal = value;
+exports.literal = literal;
 exports.join = join;
 exports.compile = compile;

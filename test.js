@@ -20,6 +20,10 @@ const pgConnectionString = require("pg-connection-string");
     `
     query {
       userById(id: 31) {
+        userEmailsByUserId {
+          id
+          email
+        }
         rnd1: random(sides: 6)
         rnd2: random(sides: 6)
         rnd3: random(sides: 10)
