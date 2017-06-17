@@ -28,6 +28,11 @@ const pgConnectionString = require("pg-connection-string");
         aliasedName: name
         avatarUrl
         createdAt
+        primaryEmailId
+        userEmailByPrimaryEmailIdAndId {
+          id
+          email
+        }
         ...Foo
       }
       sketchById(id: 69) {
