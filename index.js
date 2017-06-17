@@ -188,6 +188,13 @@ const PgRowByUniqueConstraint = listener => {
                       fragments.push(...generatedFrags);
                     }
                   }
+                  const conditions = keys.map(
+                    key =>
+                      sql.fragment`${sql.identifier(
+                        tableAlias,
+                        key.name
+                      )} = ${sql.value(args[inflection.field(key.name)])}`
+                  );
                   const query = sql.query`
                       select 
                         ${sql.join(
@@ -199,9 +206,9 @@ const PgRowByUniqueConstraint = listener => {
                           ),
                           ", "
                         )}
-                      from ${sqlFullTableName} as ${sql.identifier(
-                    tableAlias
-                  )} order by random() limit 1;
+                      from ${sqlFullTableName} as ${sql.identifier(tableAlias)} 
+                  where (${sql.join(conditions, ") and (")})
+                  order by random() limit 1;
                     `;
                   const { text, values } = sql.compile(query);
                   const { rows: [row] } = await pgClient.query(text, values);
