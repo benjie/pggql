@@ -32,6 +32,16 @@ const pgConnectionString = require("pg-connection-string");
         userEmailByPrimaryEmailIdAndId {
           id
           email
+          userByUserId {
+            id
+            name
+            userEmailByPrimaryEmailIdAndId {
+              id
+              email
+              verified
+            }
+
+          }
         }
         ...Foo
       }

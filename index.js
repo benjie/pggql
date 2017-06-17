@@ -116,6 +116,7 @@ const PgRowByUniqueConstraint = listener => {
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
+          generateFieldFragments,
         },
       },
       { scope: { isRootQuery } }
@@ -169,25 +170,11 @@ const PgRowByUniqueConstraint = listener => {
                   return memo;
                 }, {}),
                 async resolve(parent, args, { pgClient }, resolveInfo) {
-                  const { alias, fields } = parseResolveInfo(resolveInfo);
+                  const parsedResolveInfoFragment = parseResolveInfo(
+                    resolveInfo
+                  );
+                  const { alias, fields } = parsedResolveInfoFragment;
                   const tableAlias = Symbol();
-                  const fragments = [];
-                  for (const alias in fields) {
-                    const spec = fields[alias];
-                    const generator =
-                      sqlFragmentGeneratorsByClassIdAndFieldName[table.id][
-                        spec.name
-                      ];
-                    if (generator) {
-                      const generatedFrags = generator(spec, tableAlias);
-                      if (!Array.isArray(generatedFrags)) {
-                        throw new Error(
-                          "sqlFragmentGeneratorsByClassIdAndFieldName generators must generate arrays"
-                        );
-                      }
-                      fragments.push(...generatedFrags);
-                    }
-                  }
                   const conditions = keys.map(
                     key =>
                       sql.fragment`${sql.identifier(
@@ -195,21 +182,25 @@ const PgRowByUniqueConstraint = listener => {
                         key.name
                       )} = ${sql.value(args[inflection.field(key.name)])}`
                   );
+                  const fragments = generateFieldFragments(
+                    parsedResolveInfoFragment,
+                    sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
+                    tableAlias
+                  );
+                  const sqlFields = sql.join(
+                    fragments.map(
+                      ({ sqlFragment, alias }) =>
+                        sql.fragment`${sqlFragment} as ${sql.identifier(alias)}`
+                    ),
+                    ", "
+                  );
                   const query = sql.query`
-                      select 
-                        ${sql.join(
-                          fragments.map(
-                            ({ sqlFragment, alias }) =>
-                              sql.fragment`${sqlFragment} as ${sql.identifier(
-                                alias
-                              )}`
-                          ),
-                          ", "
-                        )}
+                      select ${sqlFields}
                       from ${sqlFullTableName} as ${sql.identifier(tableAlias)} 
                       where (${sql.join(conditions, ") and (")})
                     `;
                   const { text, values } = sql.compile(query);
+                  console.log(text);
                   const { rows: [row] } = await pgClient.query(text, values);
                   return row;
                 },
@@ -307,6 +298,7 @@ const PgSingleRelationPlugin = listener => {
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
+          generateFieldFragments,
         },
       },
       { scope }
@@ -372,7 +364,7 @@ const PgSingleRelationPlugin = listener => {
           );
 
           sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
-            resolveInfoFragment,
+            parsedResolveInfoFragment,
             tableAlias
           ) => {
             const foreignTableAlias = Symbol();
@@ -383,12 +375,27 @@ const PgSingleRelationPlugin = listener => {
                   key.name
                 )} = ${sql.identifier(foreignTableAlias, foreignKeys[i].name)}`
             );
+            const fragments = generateFieldFragments(
+              parsedResolveInfoFragment,
+              sqlFragmentGeneratorsByClassIdAndFieldName[foreignTable.id],
+              foreignTableAlias
+            );
             return [
               {
-                alias: resolveInfoFragment.alias,
+                alias: parsedResolveInfoFragment.alias,
                 sqlFragment: sql.fragment`
                   (
-                    select row_to_json(${sql.identifier(foreignTableAlias)})
+                    select json_build_object(
+                      ${sql.join(
+                        fragments.map(
+                          ({ sqlFragment, alias }) =>
+                            sql.fragment`${sql.literal(
+                              alias
+                            )}::text, ${sqlFragment}`
+                        ),
+                        ",\n"
+                      )}
+                    )
                     from ${sql.identifier(
                       schema.name,
                       foreignTable.name
@@ -408,6 +415,7 @@ const PgSingleRelationPlugin = listener => {
               const { alias } = parseResolveInfo(resolveInfo, {
                 deep: false,
               });
+              console.dir(data);
               return data[alias];
             },
           };
@@ -549,13 +557,36 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
         throw new Error("Argument 'schema' (array) is required");
       }
 
+      const sql = pgSQLBuilder;
       return extend(context, {
         pg: {
           introspectionResultsByKind,
           gqlTypeByClassId: {},
           gqlTypeByTypeId: {},
           sqlFragmentGeneratorsByClassIdAndFieldName: {},
-          sql: pgSQLBuilder,
+          sql,
+          generateFieldFragments(
+            parsedResolveInfoFragment,
+            sqlFragmentGenerators,
+            tableAlias
+          ) {
+            const { fields } = parsedResolveInfoFragment;
+            const fragments = [];
+            for (const alias in fields) {
+              const spec = fields[alias];
+              const generator = sqlFragmentGenerators[spec.name];
+              if (generator) {
+                const generatedFrags = generator(spec, tableAlias);
+                if (!Array.isArray(generatedFrags)) {
+                  throw new Error(
+                    "sqlFragmentGeneratorsByClassIdAndFieldName generators must generate arrays"
+                  );
+                }
+                fragments.push(...generatedFrags);
+              }
+            }
+            return fragments;
+          },
         },
       });
     });

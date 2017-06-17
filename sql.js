@@ -139,5 +139,6 @@ exports.fragment = query;
 exports.raw = raw;
 exports.identifier = identifier;
 exports.value = value;
+exports.literal = value;
 exports.join = join;
 exports.compile = compile;
