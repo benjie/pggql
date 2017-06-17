@@ -19,10 +19,28 @@ const pgConnectionString = require("pg-connection-string");
     schema,
     `
     query {
-      userById(id: 1) {
+      userById(id: 31) {
         rnd1: random(sides: 6)
         rnd2: random(sides: 6)
         rnd3: random(sides: 10)
+        benjie {
+          id
+          name
+          userEmailByPrimaryEmailIdAndId {
+            id
+            email
+            userByUserId {
+              id
+              name
+              userEmailByPrimaryEmailIdAndId {
+                id
+                email
+                verified
+              }
+
+            }
+          }
+        }
         id
         name
         aliasedName: name

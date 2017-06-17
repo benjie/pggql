@@ -45,6 +45,20 @@ const INTROSPECTION_PATH = `${__dirname}/res/introspection-query.sql`;
 const nullableIf = (condition, Type) =>
   condition ? Type : new GraphQLNonNull(Type);
 
+const sqlJsonBuildObjectFromFragments = fragments => {
+  const sql = pgSQLBuilder;
+  return sql.fragment`
+    json_build_object(
+      ${sql.join(
+        fragments.map(
+          ({ sqlFragment, alias }) =>
+            sql.fragment`${sql.literal(alias)}::text, ${sqlFragment}`
+        ),
+        ",\n"
+      )}
+    )`;
+};
+
 const withPgClient = async (pgConfig = process.env.DATABASE_URL, fn) => {
   if (!fn) {
     throw new Error("Nothing to do!");
@@ -343,6 +357,11 @@ const PgSingleRelationPlugin = listener => {
           const foreignTable = introspectionResultsByKind.class.filter(
             cls => cls.id === constraint.foreignClassId
           )[0];
+          if (!foreignTable) {
+            throw new Error(
+              `Could not find the foreign table (constraint: ${constraint.name})`
+            );
+          }
           console.dir(table);
           console.dir(foreignKeyConstraints);
           const foreignAttributes = introspectionResultsByKind.attribute
@@ -385,17 +404,7 @@ const PgSingleRelationPlugin = listener => {
                 alias: parsedResolveInfoFragment.alias,
                 sqlFragment: sql.fragment`
                   (
-                    select json_build_object(
-                      ${sql.join(
-                        fragments.map(
-                          ({ sqlFragment, alias }) =>
-                            sql.fragment`${sql.literal(
-                              alias
-                            )}::text, ${sqlFragment}`
-                        ),
-                        ",\n"
-                      )}
-                    )
+                    select ${sqlJsonBuildObjectFromFragments(fragments)}
                     from ${sql.identifier(
                       schema.name,
                       foreignTable.name
@@ -439,6 +448,7 @@ const PgComputedColumnsPlugin = listener => {
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
           gqlTypeByTypeId,
+          generateFieldFragments,
         },
       },
       { scope }
@@ -489,6 +499,8 @@ const PgComputedColumnsPlugin = listener => {
                 argDefaultsNum: 0 }
             */
 
+            // XXX: add args!
+
             const fieldName = inflection.field(
               proc.name.substr(table.name.length + 1)
             );
@@ -503,18 +515,52 @@ const PgComputedColumnsPlugin = listener => {
               );
               return;
             }
+
+            const returnType = introspectionResultsByKind.type.filter(
+              type => type.id === proc.returnTypeId
+            )[0];
+            const returnTypeTable = introspectionResultsByKind.class.filter(
+              cls => cls.id === returnType.classId
+            )[0];
+            if (!returnType) {
+              throw new Error(
+                `Could not determine return type for function '${proc.name}'`
+              );
+            }
+
             sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
-              resolveInfoFragment,
+              parsedResolveInfoFragment,
               tableAlias
-            ) => [
-              {
-                alias: resolveInfoFragment.alias,
-                sqlFragment: sql.fragment`${sql.identifier(
-                  schema.name,
-                  proc.name
-                )}(${sql.identifier(tableAlias)})`,
-              },
-            ];
+            ) => {
+              const sqlCall = sql.fragment`${sql.identifier(
+                schema.name,
+                proc.name
+              )}(${sql.identifier(tableAlias)})`;
+
+              const isTable = returnType.type === "c" && returnTypeTable;
+
+              const functionAlias = Symbol();
+              const getFragments = () =>
+                generateFieldFragments(
+                  parsedResolveInfoFragment,
+                  sqlFragmentGeneratorsByClassIdAndFieldName[
+                    returnTypeTable.id
+                  ],
+                  functionAlias
+                );
+              const sqlFragment = isTable
+                ? sql.query`(
+                  select ${sqlJsonBuildObjectFromFragments(getFragments())}
+                  from ${sqlCall} as ${sql.identifier(functionAlias)}
+                )`
+                : sqlCall;
+              return [
+                {
+                  alias: parsedResolveInfoFragment.alias,
+                  sqlFragment,
+                },
+              ];
+            };
             memo[fieldName] = {
               type: gqlTypeByTypeId[proc.returnTypeId] || GraphQLString,
               resolve: (data, _args, _context, resolveInfo) => {
