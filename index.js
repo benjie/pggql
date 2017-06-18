@@ -157,13 +157,10 @@ const PgRowByUniqueConstraint = listener => {
             const uniqueConstraints = introspectionResultsByKind.constraint
               .filter(con => ["u", "p"].includes(con.type))
               .filter(con => con.classId === table.id);
-            console.dir(table);
-            console.dir(uniqueConstraints);
             const attributes = introspectionResultsByKind.attribute
               .filter(attr => attr.classId === table.id)
               .sort((a, b) => a.num - b.num);
             uniqueConstraints.forEach(constraint => {
-              console.dir(attributes);
               const keys = attributes.filter(attr =>
                 constraint.keyAttributeNums.includes(attr.num)
               );
@@ -215,7 +212,6 @@ const PgRowByUniqueConstraint = listener => {
                       where (${sql.join(conditions, ") and (")})
                     `;
                   const { text, values } = sql.compile(query);
-                  console.log(text);
                   const { rows: [row] } = await pgClient.query(text, values);
                   return row;
                 },
@@ -364,8 +360,6 @@ const PgForwardRelationPlugin = listener => {
               `Could not find the foreign table (constraint: ${constraint.name})`
             );
           }
-          console.dir(table);
-          console.dir(foreignKeyConstraints);
           const foreignAttributes = introspectionResultsByKind.attribute
             .filter(attr => attr.classId === constraint.foreignClassId)
             .sort((a, b) => a.num - b.num);
@@ -426,7 +420,6 @@ const PgForwardRelationPlugin = listener => {
               const { alias } = parseResolveInfo(resolveInfo, {
                 deep: false,
               });
-              console.dir(data);
               return data[alias];
             },
           };
@@ -503,8 +496,6 @@ const PgBackwardRelationPlugin = listener => {
               `Could not find the table that referenced us (constraint: ${constraint.name})`
             );
           }
-          console.dir(table);
-          console.dir(foreignKeyConstraints);
           const attributes = introspectionResultsByKind.attribute
             .filter(attr => attr.classId === constraint.classId)
             .sort((a, b) => a.num - b.num);
@@ -566,7 +557,6 @@ const PgBackwardRelationPlugin = listener => {
               const { alias } = parseResolveInfo(resolveInfo, {
                 deep: false,
               });
-              console.dir(data);
               return data[alias];
             },
           };
