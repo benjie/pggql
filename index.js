@@ -27,17 +27,20 @@ const {
 } = require("graphql-iso-date");
 const pluralize = require("pluralize");
 
-const GraphQLUUID = new GraphQLScalarType({
-  name: "UUID",
-  serialize: value => String(value),
-  parseValue: value => String(value),
-  parseLiteral: ast => {
-    if (ast.kind !== Kind.STRING) {
-      throw new Error("Can only parse string values");
-    }
-    return ast.value;
-  },
-});
+const stringType = name =>
+  new GraphQLScalarType({
+    name,
+    serialize: value => String(value),
+    parseValue: value => String(value),
+    parseLiteral: ast => {
+      if (ast.kind !== Kind.STRING) {
+        throw new Error("Can only parse string values");
+      }
+      return ast.value;
+    },
+  });
+const Cursor = stringType("Cursor");
+const GraphQLUUID = stringType("UUID");
 
 const readFile = promisify(fs.readFile);
 
@@ -99,6 +102,8 @@ const defaultInflection = {
   field: camelcase,
   singleByKeys: (typeName, keys) =>
     camelcase(`${typeName}-by-${keys.join("-and-")}`), // postsByAuthorId
+  edge: name => upperFirst(camelcase(`${name}-edge`)),
+  connection: name => upperFirst(camelcase(`${name}-connection`)),
 };
 
 const QueryPlugin = listener => {
@@ -225,6 +230,81 @@ const PgRowByUniqueConstraint = listener => {
   );
 };
 
+const PgAllRows = listener => {
+  listener.on(
+    "objectType:fields",
+    (
+      spec,
+      {
+        inflection,
+        extend,
+        pg: {
+          gqlTypeByClassId,
+          gqlTypeByTypeId,
+          gqlConnectionTypeByClassId,
+          introspectionResultsByKind,
+          sqlFragmentGeneratorsByClassIdAndFieldName,
+          sql,
+          generateFieldFragments,
+        },
+      },
+      { scope: { isRootQuery } }
+    ) => {
+      if (!isRootQuery) {
+        return;
+      }
+      return extend(
+        spec,
+        introspectionResultsByKind.class.reduce((memo, table) => {
+          const type = gqlTypeByClassId[table.id];
+          const connectionType = gqlConnectionTypeByClassId[table.id];
+          const schema = introspectionResultsByKind.namespace.filter(
+            n => n.id === table.namespaceId
+          )[0];
+          if (!schema) {
+            console.warn(
+              `Could not find the schema for table '${table.name}'; skipping`
+            );
+            return memo;
+          }
+          const sqlFullTableName = sql.identifier(schema.name, table.name);
+          if (type && connectionType) {
+            memo[inflection.field(`all-${pluralize(table.name)}`)] = {
+              type: connectionType,
+              args: {},
+              async resolve(parent, args, { pgClient }, resolveInfo) {
+                const parsedResolveInfoFragment = parseResolveInfo(resolveInfo);
+                const { alias, fields } = parsedResolveInfoFragment;
+                const tableAlias = Symbol();
+                const fragments = generateFieldFragments(
+                  parsedResolveInfoFragment,
+                  sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
+                  tableAlias
+                );
+                const sqlFields = sql.join(
+                  fragments.map(
+                    ({ sqlFragment, alias }) =>
+                      sql.fragment`${sqlFragment} as ${sql.identifier(alias)}`
+                  ),
+                  ", "
+                );
+                const query = sql.query`
+                    select ${sqlFields}
+                    from ${sqlFullTableName} as ${sql.identifier(tableAlias)}
+                  `;
+                const { text, values } = sql.compile(query);
+                const { rows } = await pgClient.query(text, values);
+                return rows;
+              },
+            };
+          }
+          return memo;
+        }, {})
+      );
+    }
+  );
+};
+
 const PgColumnsPlugin = listener => {
   listener.on(
     "objectType:fields",
@@ -245,6 +325,7 @@ const PgColumnsPlugin = listener => {
       if (
         !scope.pg ||
         !scope.pg.introspection ||
+        !scope.pg.isRowType ||
         scope.pg.introspection.kind !== "class"
       ) {
         return;
@@ -588,6 +669,7 @@ const PgComputedColumnsPlugin = listener => {
       if (
         !scope.pg ||
         !scope.pg.introspection ||
+        !scope.pg.isRowType ||
         scope.pg.introspection.kind !== "class"
       ) {
         return;
@@ -643,9 +725,9 @@ const PgComputedColumnsPlugin = listener => {
               sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName]
             ) {
               console.warn(
-                `WARNING: did not add dynamic column from function '${proc.name}' because field already exists`
+                `WARNING: did not add dynamic column '${fieldName}' from function '${proc.name}' because field already exists`
               );
-              return;
+              return memo;
             }
 
             const returnType = introspectionResultsByKind.type.filter(
@@ -739,6 +821,8 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schemas } }) => {
         pg: {
           introspectionResultsByKind,
           gqlTypeByClassId: {},
+          gqlEdgeTypeByClassId: {},
+          gqlConnectionTypeByClassId: {},
           gqlTypeByTypeId: {},
           sqlFragmentGeneratorsByClassIdAndFieldName: {},
           sql,
@@ -805,6 +889,58 @@ const PgTablesPlugin = listener => {
           {
             pg: {
               introspection: table,
+              isRowType: true,
+            },
+          }
+        );
+        context.pg.gqlEdgeTypeByClassId[table.id] = buildWithHooks(
+          GraphQLObjectType,
+          {
+            name: inflection.edge(table.name),
+            fields: {
+              cursor: {
+                type: Cursor,
+                resolve(data) {
+                  return data.__cursor;
+                },
+              },
+              node: {
+                type: new GraphQLNonNull(context.pg.gqlTypeByClassId[table.id]),
+                resolve(data) {
+                  return data;
+                },
+              },
+            },
+          },
+          {
+            pg: {
+              introspection: table,
+              isEdgeType: true,
+            },
+          }
+        );
+        context.pg.gqlConnectionTypeByClassId[table.id] = buildWithHooks(
+          GraphQLObjectType,
+          {
+            name: inflection.connection(table.name),
+            fields: {
+              // XXX: pageInfo
+              // XXX: totalCount
+              // XXX: nodes
+              edges: {
+                type: new GraphQLList(
+                  context.pg.gqlEdgeTypeByClassId[table.id]
+                ),
+                resolve(data) {
+                  return data;
+                },
+              },
+            },
+          },
+          {
+            pg: {
+              introspection: table,
+              isConnectionType: true,
             },
           }
         );
@@ -1044,6 +1180,7 @@ const postGraphQLPluginsFrom = options => {
     PgTypesPlugin({ extended: options.dynamicJson }),
     QueryPlugin,
     PgRowByUniqueConstraint,
+    PgAllRows,
     PgColumnsPlugin,
     PgComputedColumnsPlugin,
     RandomFieldPlugin,
@@ -1052,19 +1189,15 @@ const postGraphQLPluginsFrom = options => {
   ].filter(_ => _);
 };
 
-const postGraphQLInflection = {
-  table: str => upperFirst(camelcase(str)),
-  field: camelcase,
-  singleByKeys: (typeName, keys) =>
-    camelcase(`${typeName}-by-${keys.join("-and-")}`),
-};
+const postGraphQLInflection = Object.assign({}, defaultInflection, {});
 
-const postGraphQLClassicIdsInflection = {
-  table: str => upperFirst(camelcase(str)),
-  field: str => (str === "id" ? "rowId" : camelcase(str)),
-  singleByKeys: (typeName, keys) =>
-    camelcase(`${typeName}-by-${keys.join("-and-")}`),
-};
+const postGraphQLClassicIdsInflection = Object.assign(
+  {},
+  postGraphQLInflection,
+  {
+    field: str => (str === "id" ? "rowId" : camelcase(str)),
+  }
+);
 
 const createPostGraphQLSchema = (client, schemas, options = {}) => {
   return schemaFromPg(client, {
