@@ -1,5 +1,5 @@
 const { graphql } = require("graphql");
-const { withRootDb } = require("../helpers");
+const { withPgClient } = require("../helpers");
 const { createPostGraphQLSchema } = require("../..");
 const { readdirSync, readFile: rawReadFile } = require("fs");
 const { promisify } = require("util");
@@ -10,8 +10,6 @@ const readFile = promisify(rawReadFile);
 const queriesDir = `${__dirname}/../fixtures/queries`;
 const queryFileNames = readdirSync(queriesDir);
 let queryResults = [];
-
-const withPgClient = withRootDb;
 
 const kitchenSinkData = () => readFile(`${__dirname}/../kitchen-sink-data.sql`);
 
@@ -44,7 +42,7 @@ beforeAll(() => {
     // Get a new Postgres client instance.
     return await withPgClient(async pgClient => {
       // Add data to the client instance we are using.
-      await pgClient.query(await kitchenSinkData);
+      await pgClient.query(await kitchenSinkData());
       // Run all of our queries in parallel.
       return await Promise.all(
         queryFileNames.map(async fileName => {

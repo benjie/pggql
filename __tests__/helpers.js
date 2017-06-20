@@ -1,17 +1,34 @@
 const pg = require("pg");
 const promisify = require("util").promisify;
 const readFile = promisify(require("fs").readFile);
+const pgConnectionString = require("pg-connection-string");
+
+const withPgClient = async (url, fn) => {
+  if (!fn) {
+    fn = url;
+    url = process.env.TEST_DATABASE_URL;
+  }
+  const pgPool = new pg.Pool(
+    pgConnectionString.parse(url)
+  );
+  let client;
+  try {
+    client = await pgPool.connect();
+    return fn(client);
+  } finally {
+    await client.release();
+  }
+};
 
 const withDbFromUrl = async (url, fn) => {
-  const client = new pg.Client(url);
-  await client.connect();
-  await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE;");
-  try {
-    return await fn(client);
-  } finally {
-    await client.query("ROLLBACK;");
-    await client.end();
-  }
+  return withPgClient(url, async client => {
+    try {
+      await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE;");
+      return fn(client);
+    } finally {
+      await client.query("ROLLBACK;");
+    }
+  });
 };
 
 const withRootDb = fn => withDbFromUrl(process.env.TEST_DATABASE_URL, fn);
@@ -86,3 +103,4 @@ withPrepopulatedDb.teardown = () => {
 
 exports.withRootDb = withRootDb;
 exports.withPrepopulatedDb = withPrepopulatedDb;
+exports.withPgClient = withPgClient;
