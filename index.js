@@ -175,12 +175,12 @@ const PgRowByUniqueConstraint = listener => {
               .filter(attr => attr.classId === table.id)
               .sort((a, b) => a.num - b.num);
             uniqueConstraints.forEach(constraint => {
-              const keys = attributes.filter(attr =>
-                constraint.keyAttributeNums.includes(attr.num)
+              const keys = constraint.keyAttributeNums.map(
+                num => attributes.filter(attr => attr.num === num)[0]
               );
-              if (keys.length !== constraint.keyAttributeNums.length) {
+              if (!keys.every(_ => _)) {
                 throw new Error(
-                  "Consistency error: ${keys.length} !== ${constraint.keyAttributeNums.length}"
+                  "Consistency error: could not find an attribute!"
                 );
               }
               memo[
