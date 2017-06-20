@@ -1,13 +1,19 @@
 const { graphql } = require("graphql");
 const { withRootDb } = require("../helpers");
 const { createPostGraphQLSchema } = require("../..");
-const { readdirSync } = require("fs");
+const { readdirSync, readFile: rawReadFile } = require("fs");
+const { promisify } = require("util");
+const { resolve: resolvePath } = require("path");
+
+const readFile = promisify(rawReadFile);
 
 const queriesDir = `${__dirname}/../fixtures/queries`;
 const queryFileNames = readdirSync(queriesDir);
 let queryResults = [];
 
 const withPgClient = withRootDb;
+
+const kitchenSinkData = () => readFile(`${__dirname}/../kitchen-sink-data.sql`);
 
 beforeAll(() => {
   // Get a few GraphQL schema instance that we can query.
@@ -63,7 +69,7 @@ beforeAll(() => {
               : gqlSchemas.normal;
           // Return the result of our GraphQL query.
           return await graphql(gqlSchema, query, null, {
-            [$$pgClient]: pgClient,
+            pgClient: pgClient,
           });
         })
       );

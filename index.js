@@ -723,15 +723,14 @@ const PgComputedColumnsPlugin = listener => {
   );
 };
 
-const PgIntrospectionPlugin = (
-  listener,
-  { pg: { pgConfig, schemas: inputSchemas } }
-) => {
+const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schemas } }) => {
   return withPgClient(pgConfig, async pgClient => {
     // Perform introspection
-    const schemas = Array.isArray(inputSchemas) ? inputSchemas : [inputSchemas];
+    if (!Array.isArray(schemas)) {
+      throw new Error("Argument 'schemas' (array) is required");
+    }
     const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
-    const { rows } = await pgClient.query(introspectionQuery, schemas);
+    const { rows } = await pgClient.query(introspectionQuery, [schemas]);
 
     const introspectionResultsByKind = rows.reduce(
       (memo, { object }) => {
@@ -749,10 +748,6 @@ const PgIntrospectionPlugin = (
     );
 
     listener.on("context", (context, { extend }) => {
-      if (!Array.isArray(schema)) {
-        throw new Error("Argument 'schema' (array) is required");
-      }
-
       const sql = pgSQLBuilder;
       return extend(context, {
         pg: {
@@ -1071,9 +1066,9 @@ const schemaFromPg = async (
   return listener.context.buildWithHooks(GraphQLSchema, {});
 };
 
-const createPostGraphQLSchema = (client, schema, options) => {
+const createPostGraphQLSchema = (client, schemas, options = {}) => {
   return schemaFromPg(client, {
-    schema,
+    schemas,
     inflection: options.classicIds
       ? postGraphQLClassicIdsInflection
       : postGraphQLInflection,
@@ -1083,3 +1078,4 @@ const createPostGraphQLSchema = (client, schema, options) => {
 
 exports.withPgClient = withPgClient;
 exports.schemaFromPg = schemaFromPg;
+exports.createPostGraphQLSchema = createPostGraphQLSchema;
