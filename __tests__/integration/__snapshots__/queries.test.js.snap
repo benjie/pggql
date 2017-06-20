@@ -1,4 +1,4 @@
-exports[`test classic-ids.graphql 1`] = `
+exports[`classic-ids.graphql 1`] = `
 Object {
   "data": Object {
     "allEdgeCases": Object {
@@ -21,7 +21,7 @@ Object {
 }
 `;
 
-exports[`test connections.graphql 1`] = `
+exports[`connections.graphql 1`] = `
 Object {
   "data": Object {
     "a": Object {
@@ -504,7 +504,7 @@ Object {
 }
 `;
 
-exports[`test dynamic-json.graphql 1`] = `
+exports[`dynamic-json.graphql 1`] = `
 Object {
   "data": Object {
     "a": true,
@@ -617,7 +617,7 @@ Object {
 }
 `;
 
-exports[`test node.graphql 1`] = `
+exports[`node.graphql 1`] = `
 Object {
   "data": Object {
     "a": Object {
@@ -782,7 +782,7 @@ Object {
 }
 `;
 
-exports[`test procedure-computed-fields.graphql 1`] = `
+exports[`procedure-computed-fields.graphql 1`] = `
 Object {
   "data": Object {
     "allEdgeCases": Object {
@@ -1035,7 +1035,7 @@ Object {
 }
 `;
 
-exports[`test procedure-query.graphql 1`] = `
+exports[`procedure-query.graphql 1`] = `
 Object {
   "data": Object {
     "add1Query": 3,
@@ -1128,7 +1128,7 @@ Object {
 }
 `;
 
-exports[`test query.graphql 1`] = `
+exports[`query.graphql 1`] = `
 Object {
   "data": Object {
     "a": null,
@@ -1170,7 +1170,7 @@ Object {
 }
 `;
 
-exports[`test relation-head-tail.graphql 1`] = `
+exports[`relation-head-tail.graphql 1`] = `
 Object {
   "data": Object {
     "allCompoundKeys": Object {
@@ -1417,7 +1417,7 @@ Object {
 }
 `;
 
-exports[`test relation-tail-head.graphql 1`] = `
+exports[`relation-tail-head.graphql 1`] = `
 Object {
   "data": Object {
     "allCompoundKeys": Object {
@@ -1546,7 +1546,7 @@ Object {
 }
 `;
 
-exports[`test types.graphql 1`] = `
+exports[`types.graphql 1`] = `
 Object {
   "data": Object {
     "allTypes": Object {
@@ -1620,7 +1620,7 @@ Object {
 }
 `;
 
-exports[`test unique-constraints.graphql 1`] = `
+exports[`unique-constraints.graphql 1`] = `
 Object {
   "data": Object {
     "a": Object {
