@@ -26,7 +26,7 @@ const withDbFromUrl = async (url, fn) => {
       await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE;");
       return fn(client);
     } finally {
-      await client.query("ROLLBACK;");
+      await client.query("COMMIT;");
     }
   });
 };
