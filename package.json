@@ -4,7 +4,7 @@
   "description": "GraphQL utilities from PostgreSQL reflection",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "scripts/test"
   },
   "repository": {
     "type": "git",
@@ -49,6 +49,10 @@
     "eslint-config-prettier": "^2.1.1",
     "eslint-plugin-jest": "^20.0.3",
     "eslint-plugin-prettier": "^2.1.2",
+    "jest": "^20.0.4",
     "prettier": "^1.4.4"
+  },
+  "jest": {
+    "testRegex": "__tests__/.*\\.test\\.js$"
   }
 }

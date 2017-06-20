@@ -101,6 +101,20 @@ const defaultInflection = {
     camelcase(`${typeName}-by-${keys.join("-and-")}`), // postsByAuthorId
 };
 
+const postGraphQLInflection = {
+  table: str => upperFirst(camelcase(str)),
+  field: camelcase,
+  singleByKeys: (typeName, keys) =>
+    camelcase(`${typeName}-by-${keys.join("-and-")}`),
+};
+
+const postGraphQLClassicIdsInflection = {
+  table: str => upperFirst(camelcase(str)),
+  field: str => (str === "id" ? "rowId" : camelcase(str)),
+  singleByKeys: (typeName, keys) =>
+    camelcase(`${typeName}-by-${keys.join("-and-")}`),
+};
+
 const QueryPlugin = listener => {
   listener.on("schema", (spec, { buildWithHooks, extend }) => {
     const queryType = buildWithHooks(
@@ -709,11 +723,15 @@ const PgComputedColumnsPlugin = listener => {
   );
 };
 
-const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schema } }) => {
+const PgIntrospectionPlugin = (
+  listener,
+  { pg: { pgConfig, schemas: inputSchemas } }
+) => {
   return withPgClient(pgConfig, async pgClient => {
     // Perform introspection
+    const schemas = Array.isArray(inputSchemas) ? inputSchemas : [inputSchemas];
     const introspectionQuery = await readFile(INTROSPECTION_PATH, "utf8");
-    const { rows } = await pgClient.query(introspectionQuery, [schema]);
+    const { rows } = await pgClient.query(introspectionQuery, schemas);
 
     const introspectionResultsByKind = rows.reduce(
       (memo, { object }) => {
@@ -826,7 +844,7 @@ const PgTablesPlugin = listener => {
   );
 };
 
-const PgTypesPlugin = listener => {
+const PgTypesPlugin = ({ extended = true } = {}) => listener => {
   listener.on(
     "context",
     (context, { buildWithHooks, inflection, pg: { gqlTypeByTypeId } }) => {
@@ -943,7 +961,7 @@ const RandomFieldPlugin = async listener => {
 const defaultPlugins = [
   PgIntrospectionPlugin,
   PgTablesPlugin,
-  PgTypesPlugin,
+  PgTypesPlugin(),
   QueryPlugin,
   PgRowByUniqueConstraint,
   PgColumnsPlugin,
@@ -953,14 +971,29 @@ const defaultPlugins = [
   PgBackwardRelationPlugin,
 ];
 
+const postGraphQLPluginsFrom = options => {
+  return [
+    PgIntrospectionPlugin,
+    PgTablesPlugin,
+    PgTypesPlugin({ extended: options.dynamicJson }),
+    QueryPlugin,
+    PgRowByUniqueConstraint,
+    PgColumnsPlugin,
+    PgComputedColumnsPlugin,
+    RandomFieldPlugin,
+    PgForwardRelationPlugin,
+    PgBackwardRelationPlugin,
+  ].filter(_ => _);
+};
+
 const schemaFromPg = async (
   pgConfig,
-  { schema, inflection = defaultInflection, plugins = defaultPlugins }
+  { schemas, inflection = defaultInflection, plugins = defaultPlugins }
 ) => {
   const options = {
     pg: {
       pgConfig,
-      schema,
+      schemas,
     },
   };
 
@@ -1036,6 +1069,16 @@ const schemaFromPg = async (
     },
   });
   return listener.context.buildWithHooks(GraphQLSchema, {});
+};
+
+const createPostGraphQLSchema = (client, schema, options) => {
+  return schemaFromPg(client, {
+    schema,
+    inflection: options.classicIds
+      ? postGraphQLClassicIdsInflection
+      : postGraphQLInflection,
+    plugins: postGraphQLPluginsFrom(options),
+  });
 };
 
 exports.withPgClient = withPgClient;
