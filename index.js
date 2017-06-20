@@ -324,8 +324,8 @@ const PgColumnsPlugin = listener => {
     ) => {
       if (
         !scope.pg ||
-        !scope.pg.introspection ||
         !scope.pg.isRowType ||
+        !scope.pg.introspection ||
         scope.pg.introspection.kind !== "class"
       ) {
         return;
@@ -397,6 +397,7 @@ const PgForwardRelationPlugin = listener => {
     ) => {
       if (
         !scope.pg ||
+        !scope.pg.isRowType ||
         !scope.pg.introspection ||
         scope.pg.introspection.kind !== "class"
       ) {
@@ -532,6 +533,7 @@ const PgBackwardRelationPlugin = listener => {
     ) => {
       if (
         !scope.pg ||
+        !scope.pg.isRowType ||
         !scope.pg.introspection ||
         scope.pg.introspection.kind !== "class"
       ) {
@@ -668,8 +670,8 @@ const PgComputedColumnsPlugin = listener => {
     ) => {
       if (
         !scope.pg ||
-        !scope.pg.introspection ||
         !scope.pg.isRowType ||
+        !scope.pg.introspection ||
         scope.pg.introspection.kind !== "class"
       ) {
         return;
@@ -913,9 +915,10 @@ const PgTablesPlugin = listener => {
             },
           },
           {
+            isEdgeType: true,
+            nodeType: context.pg.gqlTypeByClassId[table.id],
             pg: {
               introspection: table,
-              isEdgeType: true,
             },
           }
         );
@@ -926,10 +929,15 @@ const PgTablesPlugin = listener => {
             fields: {
               // XXX: pageInfo
               // XXX: totalCount
-              // XXX: nodes
+              nodes: {
+                type: new GraphQLList(context.pg.gqlTypeByClassId[table.id]),
+                resolve(data) {
+                  return data;
+                },
+              },
               edges: {
                 type: new GraphQLList(
-                  context.pg.gqlEdgeTypeByClassId[table.id]
+                  new GraphQLNonNull(context.pg.gqlEdgeTypeByClassId[table.id])
                 ),
                 resolve(data) {
                   return data;
@@ -938,9 +946,11 @@ const PgTablesPlugin = listener => {
             },
           },
           {
+            isConnectionType: true,
+            edgeType: context.pg.gqlEdgeTypeByClassId[table.id],
+            nodeType: context.pg.gqlTypeByClassId[table.id],
             pg: {
               introspection: table,
-              isConnectionType: true,
             },
           }
         );
@@ -1081,6 +1091,7 @@ const defaultPlugins = [
   PgTypesPlugin(),
   QueryPlugin,
   PgRowByUniqueConstraint,
+  PgAllRows,
   PgColumnsPlugin,
   PgComputedColumnsPlugin,
   RandomFieldPlugin,
@@ -1156,11 +1167,12 @@ const schemaFromPg = async (
           spec: newSpec,
           scope,
         });
+        const rawSpec = newSpec;
         newSpec = Object.assign({}, newSpec, {
           fields: () =>
-            listener.applyHooks("objectType:fields", newSpec.fields, {
-              spec: newSpec,
-              fields: newSpec.fields,
+            listener.applyHooks("objectType:fields", rawSpec.fields, {
+              spec: rawSpec,
+              fields: rawSpec.fields,
               scope,
               Self,
             }),
