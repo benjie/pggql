@@ -101,20 +101,6 @@ const defaultInflection = {
     camelcase(`${typeName}-by-${keys.join("-and-")}`), // postsByAuthorId
 };
 
-const postGraphQLInflection = {
-  table: str => upperFirst(camelcase(str)),
-  field: camelcase,
-  singleByKeys: (typeName, keys) =>
-    camelcase(`${typeName}-by-${keys.join("-and-")}`),
-};
-
-const postGraphQLClassicIdsInflection = {
-  table: str => upperFirst(camelcase(str)),
-  field: str => (str === "id" ? "rowId" : camelcase(str)),
-  singleByKeys: (typeName, keys) =>
-    camelcase(`${typeName}-by-${keys.join("-and-")}`),
-};
-
 const QueryPlugin = listener => {
   listener.on("schema", (spec, { buildWithHooks, extend }) => {
     const queryType = buildWithHooks(
@@ -966,21 +952,6 @@ const defaultPlugins = [
   PgBackwardRelationPlugin,
 ];
 
-const postGraphQLPluginsFrom = options => {
-  return [
-    PgIntrospectionPlugin,
-    PgTablesPlugin,
-    PgTypesPlugin({ extended: options.dynamicJson }),
-    QueryPlugin,
-    PgRowByUniqueConstraint,
-    PgColumnsPlugin,
-    PgComputedColumnsPlugin,
-    RandomFieldPlugin,
-    PgForwardRelationPlugin,
-    PgBackwardRelationPlugin,
-  ].filter(_ => _);
-};
-
 const schemaFromPg = async (
   pgConfig,
   { schemas, inflection = defaultInflection, plugins = defaultPlugins }
@@ -1064,6 +1035,35 @@ const schemaFromPg = async (
     },
   });
   return listener.context.buildWithHooks(GraphQLSchema, {});
+};
+
+const postGraphQLPluginsFrom = options => {
+  return [
+    PgIntrospectionPlugin,
+    PgTablesPlugin,
+    PgTypesPlugin({ extended: options.dynamicJson }),
+    QueryPlugin,
+    PgRowByUniqueConstraint,
+    PgColumnsPlugin,
+    PgComputedColumnsPlugin,
+    RandomFieldPlugin,
+    PgForwardRelationPlugin,
+    PgBackwardRelationPlugin,
+  ].filter(_ => _);
+};
+
+const postGraphQLInflection = {
+  table: str => upperFirst(camelcase(str)),
+  field: camelcase,
+  singleByKeys: (typeName, keys) =>
+    camelcase(`${typeName}-by-${keys.join("-and-")}`),
+};
+
+const postGraphQLClassicIdsInflection = {
+  table: str => upperFirst(camelcase(str)),
+  field: str => (str === "id" ? "rowId" : camelcase(str)),
+  singleByKeys: (typeName, keys) =>
+    camelcase(`${typeName}-by-${keys.join("-and-")}`),
 };
 
 const createPostGraphQLSchema = (client, schemas, options = {}) => {
