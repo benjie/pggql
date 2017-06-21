@@ -160,8 +160,8 @@ const PgRowByUniqueConstraint = listener => {
           const sqlFullTableName = sql.identifier(schema.name, table.name);
           if (type) {
             const uniqueConstraints = introspectionResultsByKind.constraint
-              .filter(con => ["u", "p"].includes(con.type))
-              .filter(con => con.classId === table.id);
+              .filter(con => con.classId === table.id)
+              .filter(con => ["u", "p"].includes(con.type));
             const attributes = introspectionResultsByKind.attribute
               .filter(attr => attr.classId === table.id)
               .sort((a, b) => a.num - b.num);
@@ -244,6 +244,7 @@ const PgAllRows = listener => {
           gqlConnectionTypeByClassId,
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
+          sqlFragmentGeneratorsForConnectionByClassId,
           sql,
           generateFieldFragments,
         },
@@ -278,7 +279,7 @@ const PgAllRows = listener => {
                 const tableAlias = Symbol();
                 const fragments = generateFieldFragments(
                   parsedResolveInfoFragment,
-                  sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
+                  connectionFragmentGenerators,
                   tableAlias
                 );
                 const sqlFields = sql.join(
@@ -827,6 +828,7 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schemas } }) => {
           gqlConnectionTypeByClassId: {},
           gqlTypeByTypeId: {},
           sqlFragmentGeneratorsByClassIdAndFieldName: {},
+          sqlFragmentGeneratorsForConnectionByClassId: {},
           sql,
           generateFieldFragments(
             parsedResolveInfoFragment,
@@ -864,7 +866,12 @@ const PgTablesPlugin = listener => {
       {
         buildWithHooks,
         inflection,
-        pg: { introspectionResultsByKind, gqlTypeByTypeId },
+        pg: {
+          sql,
+          introspectionResultsByKind,
+          gqlTypeByTypeId,
+          sqlFragmentGeneratorsForConnectionByClassId,
+        },
       }
     ) => {
       context.pg.introspectionResultsByKind.class.map(table => {
@@ -895,6 +902,58 @@ const PgTablesPlugin = listener => {
             },
           }
         );
+
+        const edgeFragmentGenerators = {};
+        const addEdgeFragmentGenerator = (field, generator) => {
+          edgeFragmentGenerators[field] = generator;
+        };
+
+        const schema = introspectionResultsByKind.namespace.filter(
+          n => n.id === table.namespaceId
+        )[0];
+        const primaryKeyConstraint = introspectionResultsByKind.constraint
+          .filter(con => con.classId === table.id)
+          .filter(con => ["p"].includes(con.type))[0];
+        const attributes = introspectionResultsByKind.attribute
+          .filter(attr => attr.classId === table.id)
+          .sort((a, b) => a.num - b.num);
+        const primaryKeys =
+          primaryKeyConstraint &&
+          primaryKeyConstraint.keyAttributeNums.map(
+            num => attributes.filter(attr => attr.num === num)[0]
+          );
+
+        addEdgeFragmentGenerator(
+          "node",
+          (parsedResolveInfoFragment, tableAlias) => {
+            return generateFieldFragments(
+              parsedResolveInfoFragment,
+              sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
+              tableAlias
+            );
+          }
+        );
+        addEdgeFragmentGenerator(
+          "cursor",
+          (parsedResolveInfoFragment, tableAlias) => {
+            if (!primaryKeys) {
+              return [];
+            }
+            return [
+              {
+                alias: "__cursor",
+                sqlFragment: sql.fragment`encode(json_build_array('pg', ${sql.literal(
+                  schema.name
+                )}, ${sql.literal(table.name)}, ${sql.join(
+                  primaryKeys.map(attr =>
+                    sql.identifier(tableAlias, attr.name)
+                  ),
+                  ", "
+                )})::bytea, 'base64')`,
+              },
+            ];
+          }
+        );
         context.pg.gqlEdgeTypeByClassId[table.id] = buildWithHooks(
           GraphQLObjectType,
           {
@@ -920,6 +979,20 @@ const PgTablesPlugin = listener => {
             pg: {
               introspection: table,
             },
+          }
+        );
+        const connectionFragmentGenerators = {};
+        const addConnectionFragmentGenerator = (field, generator) => {
+          connectionFragmentGenerators[field] = generator;
+        };
+        addConnectionFragmentGenerator(
+          "edges",
+          (parsedResolveInfoFragment, tableAlias) => {
+            return generateFieldFragments(
+              parsedResolveInfoFragment,
+              edgeFragmentGenerators,
+              tableAlias
+            );
           }
         );
         context.pg.gqlConnectionTypeByClassId[table.id] = buildWithHooks(
@@ -951,6 +1024,7 @@ const PgTablesPlugin = listener => {
             nodeType: context.pg.gqlTypeByClassId[table.id],
             pg: {
               introspection: table,
+              addFragmentGenerator: addConnectionFragmentGenerator,
             },
           }
         );
