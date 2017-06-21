@@ -107,8 +107,8 @@ const defaultInflection = {
 };
 
 const QueryPlugin = listener => {
-  listener.on("schema", (spec, { buildWithHooks, extend }) => {
-    const queryType = buildWithHooks(
+  listener.on("schema", (spec, { buildObjectWithHooks, extend }) => {
+    const queryType = buildObjectWithHooks(
       GraphQLObjectType,
       {
         name: "Query",
@@ -259,6 +259,7 @@ const PgAllRows = listener => {
     (
       spec,
       {
+        buildFieldWithHooks,
         inflection,
         extend,
         pg: {
@@ -293,37 +294,42 @@ const PgAllRows = listener => {
           }
           const sqlFullTableName = sql.identifier(schema.name, table.name);
           if (type && connectionType) {
-            memo[inflection.field(`all-${pluralize(table.name)}`)] = {
-              type: connectionType,
-              args: {},
-              async resolve(parent, args, { pgClient }, resolveInfo) {
-                const parsedResolveInfoFragment = parseResolveInfo(resolveInfo);
-                const { alias, fields } = parsedResolveInfoFragment;
-                const tableAlias = Symbol();
-                const fragments = generateFieldFragments(
-                  parsedResolveInfoFragment,
-                  sqlFragmentGeneratorsForConnectionByClassId[table.id],
-                  tableAlias
-                );
-                const sqlFields = sql.join(
-                  fragments.map(
-                    ({ sqlFragment, alias }) =>
-                      sql.fragment`${sqlFragment} as ${sql.identifier(alias)}`
-                  ),
-                  ", "
-                );
-                const primaryKeyConstraint = introspectionResultsByKind.constraint
-                  .filter(con => con.classId === table.id)
-                  .filter(con => ["p"].includes(con.type))[0];
-                const attributes = introspectionResultsByKind.attribute
-                  .filter(attr => attr.classId === table.id)
-                  .sort((a, b) => a.num - b.num);
-                const primaryKeys =
-                  primaryKeyConstraint &&
-                  primaryKeyConstraint.keyAttributeNums.map(
-                    num => attributes.filter(attr => attr.num === num)[0]
+            memo[
+              inflection.field(`all-${pluralize(table.name)}`)
+            ] = buildFieldWithHooks(
+              {
+                type: connectionType,
+                args: {},
+                async resolve(parent, args, { pgClient }, resolveInfo) {
+                  const parsedResolveInfoFragment = parseResolveInfo(
+                    resolveInfo
                   );
-                const query = sql.query`
+                  const { alias, fields } = parsedResolveInfoFragment;
+                  const tableAlias = Symbol();
+                  const fragments = generateFieldFragments(
+                    parsedResolveInfoFragment,
+                    sqlFragmentGeneratorsForConnectionByClassId[table.id],
+                    tableAlias
+                  );
+                  const sqlFields = sql.join(
+                    fragments.map(
+                      ({ sqlFragment, alias }) =>
+                        sql.fragment`${sqlFragment} as ${sql.identifier(alias)}`
+                    ),
+                    ", "
+                  );
+                  const primaryKeyConstraint = introspectionResultsByKind.constraint
+                    .filter(con => con.classId === table.id)
+                    .filter(con => ["p"].includes(con.type))[0];
+                  const attributes = introspectionResultsByKind.attribute
+                    .filter(attr => attr.classId === table.id)
+                    .sort((a, b) => a.num - b.num);
+                  const primaryKeys =
+                    primaryKeyConstraint &&
+                    primaryKeyConstraint.keyAttributeNums.map(
+                      num => attributes.filter(attr => attr.num === num)[0]
+                    );
+                  const query = sql.query`
                     select ${sqlFields}
                     from ${sqlFullTableName} as ${sql.identifier(tableAlias)}
                     order by ${primaryKeys
@@ -339,11 +345,17 @@ const PgAllRows = listener => {
                         )
                       : sql.literal(1)}
                   `;
-                const { text, values } = sql.compile(query);
-                const { rows } = await pgClient.query(text, values);
-                return rows;
+                  const { text, values } = sql.compile(query);
+                  const { rows } = await pgClient.query(text, values);
+                  return rows;
+                },
               },
-            };
+              {
+                pg: {
+                  isConnection: true,
+                },
+              }
+            );
           }
           return memo;
         }, {})
@@ -934,7 +946,7 @@ const PgTablesPlugin = listener => {
     (
       context,
       {
-        buildWithHooks,
+        buildObjectWithHooks,
         inflection,
         pg: {
           sql,
@@ -961,7 +973,7 @@ const PgTablesPlugin = listener => {
             isDeletable: true }
         */
         context.pg.sqlFragmentGeneratorsByClassIdAndFieldName[table.id] = {};
-        context.pg.gqlTypeByClassId[table.id] = buildWithHooks(
+        context.pg.gqlTypeByClassId[table.id] = buildObjectWithHooks(
           GraphQLObjectType,
           {
             name: inflection.table(table.name),
@@ -1026,7 +1038,7 @@ const PgTablesPlugin = listener => {
             ];
           }
         );
-        context.pg.gqlEdgeTypeByClassId[table.id] = buildWithHooks(
+        context.pg.gqlEdgeTypeByClassId[table.id] = buildObjectWithHooks(
           GraphQLObjectType,
           {
             name: inflection.edge(table.name),
@@ -1080,7 +1092,7 @@ const PgTablesPlugin = listener => {
             );
           }
         );
-        context.pg.gqlConnectionTypeByClassId[table.id] = buildWithHooks(
+        context.pg.gqlConnectionTypeByClassId[table.id] = buildObjectWithHooks(
           GraphQLObjectType,
           {
             name: inflection.connection(table.name),
@@ -1133,7 +1145,10 @@ const PgTablesPlugin = listener => {
 const PgTypesPlugin = ({ extended = true } = {}) => listener => {
   listener.on(
     "context",
-    (context, { buildWithHooks, inflection, pg: { gqlTypeByTypeId } }) => {
+    (
+      context,
+      { buildObjectWithHooks, inflection, pg: { gqlTypeByTypeId } }
+    ) => {
       /*
       type =
         { kind: 'type',
@@ -1314,7 +1329,23 @@ const schemaFromPg = async (
       }
       return Object.assign({}, obj, obj2);
     },
-    buildWithHooks(Type, spec, scope = {}) {
+    buildFieldWithHooks(spec, scope = {}) {
+      let newSpec = spec;
+      newSpec = listener.applyHooks("field", newSpec, {
+        spec: newSpec,
+        scope,
+      });
+      const rawSpec = newSpec;
+      newSpec = Object.assign({}, newSpec, {
+        args: listener.applyHooks("field:args", rawSpec.args, {
+          spec: rawSpec,
+          args: rawSpec.args,
+          scope,
+        }),
+      });
+      return newSpec;
+    },
+    buildObjectWithHooks(Type, spec, scope = {}) {
       let newSpec = spec;
       if (Type === GraphQLSchema) {
         newSpec = listener.applyHooks("schema", newSpec, {
@@ -1341,7 +1372,7 @@ const schemaFromPg = async (
       return Self;
     },
   });
-  return listener.context.buildWithHooks(GraphQLSchema, {});
+  return listener.context.buildObjectWithHooks(GraphQLSchema, {});
 };
 
 const postGraphQLPluginsFrom = options => {
