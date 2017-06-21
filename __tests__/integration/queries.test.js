@@ -11,7 +11,8 @@ const queriesDir = `${__dirname}/../fixtures/queries`;
 const queryFileNames = readdirSync(queriesDir);
 let queryResults = [];
 
-const kitchenSinkData = () => readFile(`${__dirname}/../kitchen-sink-data.sql`, 'utf8');
+const kitchenSinkData = () =>
+  readFile(`${__dirname}/../kitchen-sink-data.sql`, "utf8");
 
 beforeAll(() => {
   // Get a few GraphQL schema instance that we can query.
