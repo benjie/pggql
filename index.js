@@ -202,7 +202,7 @@ const PgRowByUniqueConstraint = listener => {
                   const fragments = generateFieldFragments(
                     parsedResolveInfoFragment,
                     sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
-                    tableAlias
+                    { tableAlias }
                   );
                   const sqlFields = sql.join(
                     fragments.map(
@@ -294,6 +294,7 @@ const PgAllRows = listener => {
           }
           const sqlFullTableName = sql.identifier(schema.name, table.name);
           if (type && connectionType) {
+            const clauses = {};
             memo[
               inflection.field(`all-${pluralize(table.name)}`)
             ] = buildFieldWithHooks(
@@ -309,7 +310,7 @@ const PgAllRows = listener => {
                   const fragments = generateFieldFragments(
                     parsedResolveInfoFragment,
                     sqlFragmentGeneratorsForConnectionByClassId[table.id],
-                    tableAlias
+                    { tableAlias }
                   );
                   const sqlFields = sql.join(
                     fragments.map(
@@ -353,6 +354,11 @@ const PgAllRows = listener => {
               {
                 pg: {
                   isConnection: true,
+                  addClauseForArg: (arg, clauseType, fragGen) => {
+                    clauses[arg] = clauses[arg] || {};
+                    clauses[arg][clauseType] = clauses[arg][clauseType] || [];
+                    clauses[arg][clauseType].push(fragGen);
+                  },
                 },
               }
             );
@@ -409,7 +415,7 @@ const PgColumnsPlugin = listener => {
             const fieldName = inflection.field(`${attr.name}`);
             sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
               resolveInfoFragment,
-              tableAlias
+              { tableAlias }
             ) => [
               {
                 alias: resolveInfoFragment.alias,
@@ -521,7 +527,7 @@ const PgForwardRelationPlugin = listener => {
 
           sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
             parsedResolveInfoFragment,
-            tableAlias
+            { tableAlias }
           ) => {
             const foreignTableAlias = Symbol();
             const conditions = keys.map(
@@ -534,7 +540,7 @@ const PgForwardRelationPlugin = listener => {
             const fragments = generateFieldFragments(
               parsedResolveInfoFragment,
               sqlFragmentGeneratorsByClassIdAndFieldName[foreignTable.id],
-              foreignTableAlias
+              { tableAlias: foreignTableAlias }
             );
             return [
               {
@@ -659,7 +665,10 @@ const PgBackwardRelationPlugin = listener => {
 
           sqlFragmentGeneratorsByClassIdAndFieldName[foreignTable.id][
             fieldName
-          ] = (parsedResolveInfoFragment, foreignTableAlias) => {
+          ] = (
+            parsedResolveInfoFragment,
+            { tableAlias: foreignTableAlias }
+          ) => {
             const tableAlias = Symbol();
             const conditions = keys.map(
               (key, i) =>
@@ -671,7 +680,7 @@ const PgBackwardRelationPlugin = listener => {
             const fragments = generateFieldFragments(
               parsedResolveInfoFragment,
               sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
-              tableAlias
+              { tableAlias }
             );
             const primaryKeyConstraint = introspectionResultsByKind.constraint
               .filter(con => con.classId === table.id)
@@ -829,7 +838,7 @@ const PgComputedColumnsPlugin = listener => {
 
             sqlFragmentGeneratorsByClassIdAndFieldName[table.id][fieldName] = (
               parsedResolveInfoFragment,
-              foreignTableAlias
+              { tableAlias: foreignTableAlias }
             ) => {
               const sqlCall = sql.fragment`${sql.identifier(
                 schema.name,
@@ -845,7 +854,7 @@ const PgComputedColumnsPlugin = listener => {
                   sqlFragmentGeneratorsByClassIdAndFieldName[
                     returnTypeTable.id
                   ],
-                  functionAlias
+                  { tableAlias: functionAlias }
                 );
               const sqlFragment = isTable
                 ? sql.query`(
@@ -915,7 +924,7 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schemas } }) => {
           generateFieldFragments(
             parsedResolveInfoFragment,
             sqlFragmentGenerators,
-            tableAlias
+            scope
           ) {
             const { fields } = parsedResolveInfoFragment;
             const fragments = [];
@@ -923,7 +932,7 @@ const PgIntrospectionPlugin = (listener, { pg: { pgConfig, schemas } }) => {
               const spec = fields[alias];
               const generator = sqlFragmentGenerators[spec.name];
               if (generator) {
-                const generatedFrags = generator(spec, tableAlias);
+                const generatedFrags = generator(spec, scope);
                 if (!Array.isArray(generatedFrags)) {
                   throw new Error(
                     "sqlFragmentGeneratorsByClassIdAndFieldName generators must generate arrays"
@@ -1009,11 +1018,11 @@ const PgTablesPlugin = listener => {
 
         addEdgeFragmentGenerator(
           "node",
-          (parsedResolveInfoFragment, tableAlias) => {
+          (parsedResolveInfoFragment, { tableAlias }) => {
             return generateFieldFragments(
               parsedResolveInfoFragment,
               sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
-              tableAlias
+              { tableAlias }
             );
           }
         );
@@ -1074,21 +1083,21 @@ const PgTablesPlugin = listener => {
         };
         addConnectionFragmentGenerator(
           "edges",
-          (parsedResolveInfoFragment, tableAlias) => {
+          (parsedResolveInfoFragment, { tableAlias }) => {
             return generateFieldFragments(
               parsedResolveInfoFragment,
               edgeFragmentGenerators,
-              tableAlias
+              { tableAlias }
             );
           }
         );
         addConnectionFragmentGenerator(
           "nodes",
-          (parsedResolveInfoFragment, tableAlias) => {
+          (parsedResolveInfoFragment, { tableAlias }) => {
             return generateFieldFragments(
               parsedResolveInfoFragment,
               sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
-              tableAlias
+              { tableAlias }
             );
           }
         );
@@ -1137,6 +1146,39 @@ const PgTablesPlugin = listener => {
         }
         context.pg.gqlTypeByTypeId[tableType.id] =
           context.pg.gqlTypeByClassId[table.id];
+      });
+    }
+  );
+};
+
+const PgConnectionArgs = listener => {
+  listener.on(
+    "field:args",
+    (
+      args,
+      {
+        extend,
+        pg: {
+          sql,
+          introspectionResultsByKind,
+          gqlTypeByTypeId,
+          sqlFragmentGeneratorsByClassIdAndFieldName,
+          sqlFragmentGeneratorsForConnectionByClassId,
+          generateFieldFragments,
+        },
+      },
+      { scope: { pg: { addClauseForArg } } }
+    ) => {
+      addClauseForArg("before", "where", (value, tableAlias) => {
+        sql.fragment`__cursor < ${sql.value(value)}`;
+      });
+      return extend(args, {
+        before: {
+          type: Cursor,
+        },
+        after: {
+          type: Cursor,
+        },
       });
     }
   );
@@ -1271,6 +1313,7 @@ const defaultPlugins = [
   RandomFieldPlugin,
   PgForwardRelationPlugin,
   PgBackwardRelationPlugin,
+  PgConnectionArgs,
 ];
 
 const schemaFromPg = async (
@@ -1388,6 +1431,7 @@ const postGraphQLPluginsFrom = options => {
     RandomFieldPlugin,
     PgForwardRelationPlugin,
     PgBackwardRelationPlugin,
+    PgConnectionArgs,
   ].filter(_ => _);
 };
 
