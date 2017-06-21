@@ -406,9 +406,6 @@ const PgForwardRelationPlugin = listener => {
       }
       const table = scope.pg.introspection;
       // This is a relation in which we (table) are local, and there's a foreign table
-      const schema = introspectionResultsByKind.namespace.filter(
-        n => n.id === table.namespaceId
-      )[0];
 
       const foreignKeyConstraints = introspectionResultsByKind.constraint
         .filter(con => ["f"].includes(con.type))
@@ -443,6 +440,9 @@ const PgForwardRelationPlugin = listener => {
               `Could not find the foreign table (constraint: ${constraint.name})`
             );
           }
+          const foreignSchema = introspectionResultsByKind.namespace.filter(
+            n => n.id === foreignTable.namespaceId
+          )[0];
           const foreignAttributes = introspectionResultsByKind.attribute
             .filter(attr => attr.classId === constraint.foreignClassId)
             .sort((a, b) => a.num - b.num);
@@ -485,7 +485,7 @@ const PgForwardRelationPlugin = listener => {
                   (
                     select ${sqlJsonBuildObjectFromFragments(fragments)}
                     from ${sql.identifier(
-                      schema.name,
+                      foreignSchema.name,
                       foreignTable.name
                     )} as ${sql.identifier(foreignTableAlias)}
                     where (${sql.join(conditions, ") and (")})
@@ -543,10 +543,6 @@ const PgBackwardRelationPlugin = listener => {
       // This is a relation in which WE are foreign
       const foreignTable = scope.pg.introspection;
 
-      const schema = introspectionResultsByKind.namespace.filter(
-        n => n.id === foreignTable.namespaceId
-      )[0];
-
       const foreignKeyConstraints = introspectionResultsByKind.constraint
         .filter(con => ["f"].includes(con.type))
         .filter(con => con.foreignClassId === foreignTable.id);
@@ -580,6 +576,10 @@ const PgBackwardRelationPlugin = listener => {
               `Could not find the table that referenced us (constraint: ${constraint.name})`
             );
           }
+          const schema = introspectionResultsByKind.namespace.filter(
+            n => n.id === table.namespaceId
+          )[0];
+
           const attributes = introspectionResultsByKind.attribute
             .filter(attr => attr.classId === constraint.classId)
             .sort((a, b) => a.num - b.num);
