@@ -211,10 +211,33 @@ const PgRowByUniqueConstraint = listener => {
                     ),
                     ", "
                   );
+                  const primaryKeyConstraint = introspectionResultsByKind.constraint
+                    .filter(con => con.classId === table.id)
+                    .filter(con => ["p"].includes(con.type))[0];
+                  const attributes = introspectionResultsByKind.attribute
+                    .filter(attr => attr.classId === table.id)
+                    .sort((a, b) => a.num - b.num);
+                  const primaryKeys =
+                    primaryKeyConstraint &&
+                    primaryKeyConstraint.keyAttributeNums.map(
+                      num => attributes.filter(attr => attr.num === num)[0]
+                    );
                   const query = sql.query`
                       select ${sqlFields}
                       from ${sqlFullTableName} as ${sql.identifier(tableAlias)} 
                       where (${sql.join(conditions, ") and (")})
+                      order by ${primaryKeys
+                        ? sql.join(
+                            primaryKeys.map(
+                              key =>
+                                sql.fragment`${sql.identifier(
+                                  tableAlias,
+                                  key.name
+                                )} asc`
+                            ),
+                            ", "
+                          )
+                        : sql.literal(1)}
                     `;
                   const { text, values } = sql.compile(query);
                   const { rows: [row] } = await pgClient.query(text, values);
@@ -289,9 +312,32 @@ const PgAllRows = listener => {
                   ),
                   ", "
                 );
+                const primaryKeyConstraint = introspectionResultsByKind.constraint
+                  .filter(con => con.classId === table.id)
+                  .filter(con => ["p"].includes(con.type))[0];
+                const attributes = introspectionResultsByKind.attribute
+                  .filter(attr => attr.classId === table.id)
+                  .sort((a, b) => a.num - b.num);
+                const primaryKeys =
+                  primaryKeyConstraint &&
+                  primaryKeyConstraint.keyAttributeNums.map(
+                    num => attributes.filter(attr => attr.num === num)[0]
+                  );
                 const query = sql.query`
                     select ${sqlFields}
                     from ${sqlFullTableName} as ${sql.identifier(tableAlias)}
+                    order by ${primaryKeys
+                      ? sql.join(
+                          primaryKeys.map(
+                            key =>
+                              sql.fragment`${sql.identifier(
+                                tableAlias,
+                                key.name
+                              )} asc`
+                          ),
+                          ", "
+                        )
+                      : sql.literal(1)}
                   `;
                 const { text, values } = sql.compile(query);
                 const { rows } = await pgClient.query(text, values);
@@ -614,6 +660,17 @@ const PgBackwardRelationPlugin = listener => {
               sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
               tableAlias
             );
+            const primaryKeyConstraint = introspectionResultsByKind.constraint
+              .filter(con => con.classId === table.id)
+              .filter(con => ["p"].includes(con.type))[0];
+            const attributes = introspectionResultsByKind.attribute
+              .filter(attr => attr.classId === table.id)
+              .sort((a, b) => a.num - b.num);
+            const primaryKeys =
+              primaryKeyConstraint &&
+              primaryKeyConstraint.keyAttributeNums.map(
+                num => attributes.filter(attr => attr.num === num)[0]
+              );
             return [
               {
                 alias: parsedResolveInfoFragment.alias,
@@ -627,6 +684,18 @@ const PgBackwardRelationPlugin = listener => {
                       table.name
                     )} as ${sql.identifier(tableAlias)}
                     where (${sql.join(conditions, ") and (")})
+                    order by ${primaryKeys
+                      ? sql.join(
+                          primaryKeys.map(
+                            key =>
+                              sql.fragment`${sql.identifier(
+                                tableAlias,
+                                key.name
+                              )} asc`
+                          ),
+                          ", "
+                        )
+                      : sql.literal(1)}
                   )
                 `,
               },
