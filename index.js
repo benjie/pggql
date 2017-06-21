@@ -570,6 +570,7 @@ const PgBackwardRelationPlugin = listener => {
         pg: {
           gqlTypeByTypeId,
           gqlTypeByClassId,
+          gqlConnectionTypeByClassId,
           introspectionResultsByKind,
           sqlFragmentGeneratorsByClassIdAndFieldName,
           sql,
@@ -704,7 +705,7 @@ const PgBackwardRelationPlugin = listener => {
           memo[fieldName] = {
             type: nullableIf(
               !keys.every(key => key.isNotNull),
-              new GraphQLList(new GraphQLNonNull(gqlTableType))
+              gqlConnectionTypeByClassId[table.id]
             ),
             resolve: (data, _args, _context, resolveInfo) => {
               const { alias } = parseResolveInfo(resolveInfo, {
