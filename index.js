@@ -279,7 +279,7 @@ const PgAllRows = listener => {
                 const tableAlias = Symbol();
                 const fragments = generateFieldFragments(
                   parsedResolveInfoFragment,
-                  connectionFragmentGenerators,
+                  sqlFragmentGeneratorsForConnectionByClassId[table.id],
                   tableAlias
                 );
                 const sqlFields = sql.join(
@@ -870,7 +870,9 @@ const PgTablesPlugin = listener => {
           sql,
           introspectionResultsByKind,
           gqlTypeByTypeId,
+          sqlFragmentGeneratorsByClassIdAndFieldName,
           sqlFragmentGeneratorsForConnectionByClassId,
+          generateFieldFragments,
         },
       }
     ) => {
@@ -982,6 +984,9 @@ const PgTablesPlugin = listener => {
           }
         );
         const connectionFragmentGenerators = {};
+        sqlFragmentGeneratorsForConnectionByClassId[
+          table.id
+        ] = connectionFragmentGenerators;
         const addConnectionFragmentGenerator = (field, generator) => {
           connectionFragmentGenerators[field] = generator;
         };
@@ -991,6 +996,16 @@ const PgTablesPlugin = listener => {
             return generateFieldFragments(
               parsedResolveInfoFragment,
               edgeFragmentGenerators,
+              tableAlias
+            );
+          }
+        );
+        addConnectionFragmentGenerator(
+          "nodes",
+          (parsedResolveInfoFragment, tableAlias) => {
+            return generateFieldFragments(
+              parsedResolveInfoFragment,
+              sqlFragmentGeneratorsByClassIdAndFieldName[table.id],
               tableAlias
             );
           }
